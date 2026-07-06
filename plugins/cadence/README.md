@@ -334,7 +334,14 @@ them. `specified` and `open` are *settled, idle* states — the next tick acts.
 ## Anatomy of a Cadence PR
 
 Every PR is written **for a human who has not been following the cycle** — didactic,
-self-contained, and sized to the task's complexity. A rich task gets the full body:
+self-contained, and sized to the task's complexity.
+
+A real high-complexity Cadence PR — note the embedded architecture diagram, the numbered
+**UAT** with exact commands, and the **Decision log** capturing each autonomous choice:
+
+![Example of a Cadence-generated PR body: architecture diagram, UAT checklist, and decision log](assets/example-pr.jpeg)
+
+A rich task gets the full body:
 
 - **What & why** — plain-language summary of the change and its purpose.
 - **Architecture** — one or more **Mermaid diagrams** of the data/flow the change adds.
