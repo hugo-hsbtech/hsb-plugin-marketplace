@@ -1,8 +1,8 @@
 ---
-name: cycle-executor
+name: cadence-executor
 description: >
   Autonomous project-manager that EXECUTES a parallel cycle plan (from
-  /hsb:planner or any wave schedule). For each unblocked task it runs the full
+  /cadence:plan or any wave schedule). For each unblocked task it runs the full
   delivery lifecycle: git worktree → branch → superpowers spec/plan/implement
   (auto-approving every human-in-the-loop gate by following the recommended
   option and logging the alternatives) → open a PR with UAT, mermaid diagrams,
@@ -17,7 +17,7 @@ description: >
   plan PR → main; the human merges the plan PR last.
   Use when the user says: "execute the cycles", "ship the planned cycles", "run
   the waves", "implement these tasks autonomously", "drive these PRs", or runs the
-  /hsb:execute-cycles command (which loads this skill).
+  /cadence:ship command (which loads this skill).
   When tasks are linked to Linear/Jira/etc., it mirrors each task's status into the
   tracker as it executes (In Progress → In Review → Done/Blocked).
   HARD RULES: one dedicated agent and one PR per task (never combine tasks into a
@@ -31,19 +31,19 @@ description: >
 
 # Execute Cycles — Autonomous Delivery PM
 
-Take a **cycle plan** (waves of parallel-safe tasks from `/hsb:planner`) and drive
+Take a **cycle plan** (waves of parallel-safe tasks from `/cadence:plan`) and drive
 each task to a merge-ready PR, fully autonomously except the merge itself. You are the
 PM: you dispatch task agents, you keep PRs healthy, you don't merge (unless the user
 tells you to), and you never touch `main`. **The process FLOWS end to end — it never
 freezes a task waiting for another's PR to merge.**
 
 **Branch topology — flow via PR base, not merge gates (read first).** A cycle has ONE
-**integration branch** (`hsb/<slug>-integration`) that holds the plan/spec docs and is
+**integration branch** (`cadence/<slug>-integration`) that holds the plan/spec docs and is
 itself a **plan PR → `main`** (opened as draft). Dependencies are expressed by where a
 task's PR is **based**, so work flows without waiting for merges:
 - **No blocker** → branch off, and PR targets, the **integration branch**.
 - **Exactly one blocker** → branch off, and PR **stacks on, that blocker's branch**
-  (`--base hsb/<slug>-t<blockerId>-<slug>`). The task starts as soon as the blocker's
+  (`--base cadence/<slug>-t<blockerId>-<slug>`). The task starts as soon as the blocker's
   branch exists — no need to wait for it to merge.
 - **Two or more blockers** → can't stack on several at once, so branch off and target
   the **integration branch** (the convergence point where all blockers land). Rebase
@@ -54,12 +54,12 @@ is the human's one clean merge into `main`.
 
 ```
 main
- └─ hsb/<slug>-integration                       ← plan PR (plan docs) → main   [human merges LAST]
-     ├─ hsb/<slug>-t1-add-reply-matcher          ← no blocker  → PR base: integration
-     │   └─ hsb/<slug>-t2-wire-inbound-pipeline   ← needs t1    → PR base: t1's branch (stacked)
-     └─ hsb/<slug>-t3-backfill-correlations       ← needs t1+t2 → PR base: integration (2+ blockers)
+ └─ cadence/<slug>-integration                       ← plan PR (plan docs) → main   [human merges LAST]
+     ├─ cadence/<slug>-t1-add-reply-matcher          ← no blocker  → PR base: integration
+     │   └─ cadence/<slug>-t2-wire-inbound-pipeline   ← needs t1    → PR base: t1's branch (stacked)
+     └─ cadence/<slug>-t3-backfill-correlations       ← needs t1+t2 → PR base: integration (2+ blockers)
 ```
-(Task branches are **descriptive**: `hsb/<slug>-t<id>-<task-slug>`, the slug says
+(Task branches are **descriptive**: `cadence/<slug>-t<id>-<task-slug>`, the slug says
 what the task does.)
 
 ## Non-negotiable rules
@@ -101,9 +101,9 @@ what the task does.)
   parallel subagent in its OWN worktree. Never collapse multiple tasks into one
   agent, and never implement a task inline yourself. See dispatch step 2.
 - **Branch names must describe the work.** Every task branch is
-  `hsb/<slug>-t<id>-<task-slug>`, where `<task-slug>` is a 2–5-word kebab-case summary
+  `cadence/<slug>-t<id>-<task-slug>`, where `<task-slug>` is a 2–5-word kebab-case summary
   of what the task actually does (derived from its title/goal during the Spec phase).
-  A bare `hsb/<slug>-t<id>` that doesn't say what the PR does is not acceptable.
+  A bare `cadence/<slug>-t<id>` that doesn't say what the PR does is not acceptable.
 - **One PR per task — the default, always.** Each task ships on its own branch in
   its own worktree and opens its **own** PR. Never combine multiple tasks' changes
   into a single shared branch or PR. The only exception: a task whose change is so
@@ -157,7 +157,7 @@ back to monitor. To make that impossible, end **every** turn by checking state:
 
 > **If ANY task is `status ∈ {pending, specifying, specified, implementing, open, fixing}` OR the plan PR
 > is not yet merged into `main`, the LAST action of this turn MUST be a
-> `ScheduleWakeup` call** (re-entering with the same `/hsb:execute-cycles
+> `ScheduleWakeup` call** (re-entering with the same `/cadence:ship
 > <plan-path>`). Only when every task is `done`/`failed` **and the plan PR has been
 > merged** may you end without scheduling — and then you write the final summary.
 
@@ -172,19 +172,19 @@ review/CI/conflict you acted on this turn must have a recorded `replyUrl` on the
 Never end a turn having pushed a fix without posting (and verifying) its reply.
 
 ## Inputs
-- A cycle plan: a path to a cycle-plan markdown produced by `/hsb:planner` — named
+- A cycle plan: a path to a cycle-plan markdown produced by `/cadence:plan` — named
   `docs/plans/proposed/<YYYYMMDD-HHMM>-<slug-of-proposed>-<task-id>.md` — or the wave
-  schedule already in context. If none is given, run `/hsb:planner` first or ask for
+  schedule already in context. If none is given, run `/cadence:plan` first or ask for
   the plan. Do not invent tasks.
 - Read the plan's **metadata header** for the canonical `Slug` and `Task-id` — use
-  that `slug` for all `hsb/<slug>-*` branches and the cycle state directory (see State
+  that `slug` for all `cadence/<slug>-*` branches and the cycle state directory (see State
   directory). Do NOT derive the slug by parsing the filename (the name is timestamped).
 - Parse: waves, per-task IDs, summaries, dependencies, and per-task context briefs
   (touch sets, acceptance criteria).
 
 ## State directory (survives across wakeups & sessions; split by owner)
 Monitoring spans hours-to-days and re-enters via scheduled wakeups, so persist
-everything durably under `.hsb/cycles/` at repo root (create `.hsb/` and add it to
+everything durably under `.cadence/cycles/` at repo root (create `.cadence/` and add it to
 the repo's `.gitignore` if missing — never commit cycle state onto a feature branch).
 Schema in `references/execution-state.md`.
 
@@ -192,7 +192,7 @@ Schema in `references/execution-state.md`.
 and write its own state without racing the others (parallel agents writing one shared
 JSON would clobber each other):
 ```
-.hsb/cycles/<YYYYMMDD-HHMM>-<6char-hash>-<slug>-cycle/
+.cadence/cycles/<YYYYMMDD-HHMM>-<6char-hash>-<slug>-cycle/
   run.json            ← ORCHESTRATOR-owned: slug, planPath, integrationBranch,
                          planPr*, prTitlePattern, preflight, wave schedule,
                          issueTracker, monitorIntervalSeconds, nextWakeupAt
@@ -211,7 +211,7 @@ JSON would clobber each other):
 
 **Locate-or-create (at the START of every invocation — the timestamped name is NOT
 reconstructable, so never blindly create a new one):**
-1. Glob `.hsb/cycles/*-<slug>-cycle/run.json`.
+1. Glob `.cadence/cycles/*-<slug>-cycle/run.json`.
 2. Pick the dir whose `run.json.planPath` equals the current plan and isn't complete;
    if several, newest by the `<YYYYMMDD-HHMM>` prefix. Resume from it.
 3. If none matches → fresh run: create the dir + `run.json` (stamp `createdAt`,
@@ -332,7 +332,7 @@ to dispatch a new wave (auth/MCP can drop between sessions).
 
 Monitoring uses the in-session `ScheduleWakeup` loop only (no cron). It is cheap and
 always runs with your verified auth; it pauses if the session is fully terminated
-and resumes when you re-run `/hsb:execute-cycles <plan-path>`.
+and resumes when you re-run `/cadence:ship <plan-path>`.
 
 ### 1. Plan the run + open the integration (plan) PR
 1. Load the plan; write/refresh `run.json` with the task roster + wave schedule
@@ -341,8 +341,8 @@ and resumes when you re-run `/hsb:execute-cycles <plan-path>`.
    phase and written by that agent. Per-task `tasks/<id>.json` files are created by
    their own agents on first spawn — the orchestrator never pre-writes them.
 2. **Create the integration branch as a worktree off latest `main`:**
-   `git fetch origin && git worktree add .claude/worktrees/hsb-<slug>-integration -b
-   hsb/<slug>-integration origin/main`. Record `integrationBranch` +
+   `git fetch origin && git worktree add .claude/worktrees/cadence-<slug>-integration -b
+   cadence/<slug>-integration origin/main`. Record `integrationBranch` +
    `integrationWorktree` in state. Use a **worktree**, not a bare `git branch` pointer —
    the worktree is what lets you relocate the plan docs off the `main` checkout without
    leaving it dirty (a plain pointer would strand the untracked docs in `main`).
@@ -360,7 +360,7 @@ and resumes when you re-run `/hsb:execute-cycles <plan-path>`.
       `main`); the move is what removes them from `main`.
    3. In the integration worktree, `git add` those paths, commit
       (`cycle: plan + design docs for <slug>`), and
-      `git push -u origin hsb/<slug>-integration`.
+      `git push -u origin cadence/<slug>-integration`.
    4. **Post-condition — assert `main` is clean of cycle files.** Run
       `git status --porcelain` on the `main` checkout and confirm **none of the in-scope
       doc paths remain** there; they now live only on the integration branch. Out-of-
@@ -369,7 +369,7 @@ and resumes when you re-run `/hsb:execute-cycles <plan-path>`.
       commit it before continuing — **never open the plan PR with cycle docs left
       uncommitted on `main`.**
 4. **Open the plan PR → `main` as a draft:** `gh pr create --base main --head
-   hsb/<slug>-integration --draft`. Title: resolve via **PR title convention** (for
+   cadence/<slug>-integration --draft`. Title: resolve via **PR title convention** (for
    this first PR, match the repo's house style). Body: the cycle overview + a
    **static task→PR list** — one line per task, `T-id — <title> — #<prNumber>`,
    appended **once** when that task's PR opens. Do NOT mirror PR status / CI / merge
@@ -421,7 +421,7 @@ tasks' open PRs; the quick monitor check can be foreground. Each agent resumes f
 Forbidden, because it breaks parallelism, isolation, one-PR-per-task, or idle-gating:
 - Putting two or more tasks into one agent's prompt ("do T2 and T3").
 - Sharing one branch/worktree across tasks — each task gets a distinct **descriptive**
-  branch `hsb/<slug>-t<id>-<task-slug>` and worktree, so each produces a distinct PR.
+  branch `cadence/<slug>-t<id>-<task-slug>` and worktree, so each produces a distinct PR.
 - Doing a task's build/monitor/fix/state-write inline yourself instead of in its
   agent. (The top orchestrator never touches a task's PR or `tasks/<id>.json`.)
 - **Spawning a monitor/second agent for a task that already has one in flight**, or
@@ -455,7 +455,7 @@ After the tick's per-task agents return, the top orchestrator does only bookkeep
   `delaySeconds = 180` (quick reaction without being frenetic; the tool clamps to
   [60, 3600], so sub-60s is impossible). Use `run.json.monitorIntervalSeconds`
   (default 180). Pass `reason` naming what you're watching, and `prompt` = the same
-  `/hsb:execute-cycles <plan-path>` so the next wake re-enters, locates the run, and
+  `/cadence:ship <plan-path>` so the next wake re-enters, locates the run, and
   continues. Record `nextWakeupAt`. This is the **last thing you do this turn**.
 - **End condition:** only when the **plan PR is merged into `main`** AND every task
   is `done`/`failed` — remove the integration worktree/branch, write a final summary,
@@ -489,17 +489,17 @@ for its PR. **On every status change it also runs the Issue-tracker status sync*
 ### Spec phase (analysis + plan; runs on opus/high effort, every task)
 1. **Worktree + DESCRIPTIVE branch (off this task's BASE).** `git fetch origin`, then
    create a durable worktree whose branch is cut from this task's **base** — NOT main:
-   - **0 or 2+ blockers** → base = the integration branch (`origin/hsb/<slug>-integration`).
+   - **0 or 2+ blockers** → base = the integration branch (`origin/cadence/<slug>-integration`).
    - **exactly 1 blocker** → base = that blocker's branch
-     (`origin/hsb/<slug>-t<blockerId>-<blocker-slug>`) — a **stacked** branch.
+     (`origin/cadence/<slug>-t<blockerId>-<blocker-slug>`) — a **stacked** branch.
 
    The branch name **must describe what the task does**, not just its id:
    ```
-   hsb/<slug>-t<id>-<task-slug>
+   cadence/<slug>-t<id>-<task-slug>
    ```
    where `<task-slug>` is a 2–5-word kebab-case summary of the task's actual work
-   (from the title/goal), e.g. `hsb/reply-followups-t1-add-reply-correlation-matcher`.
-   A generic `hsb/<slug>-t<id>` with no description is **not acceptable** — derive the
+   (from the title/goal), e.g. `cadence/reply-followups-t1-add-reply-correlation-matcher`.
+   A generic `cadence/<slug>-t<id>` with no description is **not acceptable** — derive the
    slug from what you're building. Create it:
    `git worktree add .claude/worktrees/<branch> -b <branch> origin/<base>`.
    Record `branch`, `worktreePath`, and `baseBranch` (the resolved base) to
@@ -700,7 +700,7 @@ this task's PR `<n>`:
    --body '…'`** describing the failure + the fix + commit SHA, and record its URL. A
    CI fix without a posted comment violates NO SILENT FIXES.
 4. **Merge conflict / behind base?** Rebase the branch onto **this task's `baseBranch`**
-   (from `tasks/<id>.json`) — the integration branch (`origin/hsb/<slug>-integration`)
+   (from `tasks/<id>.json`) — the integration branch (`origin/cadence/<slug>-integration`)
    for a 0/2+-blocker task, or the **blocker's branch** for a stacked task; for the
    **plan PR** it's `origin/main`. Never rebase onto `main` for a task. Resolve,
    force-push the branch (never main). **Because we flow instead of gating, a base
@@ -731,7 +731,7 @@ this task's PR `<n>`:
 - **Plan-PR fixes go DIRECTLY on the integration branch — no child PRs.** Once the
   cycle is in the plan-PR phase (tasks merged, only small review/CI comments left on
   the parent PR), feedback on the plan PR is committed straight to its own head,
-  `hsb/<slug>-integration`. Do **not** open a child task PR (worktree→branch→PR→merge)
+  `cadence/<slug>-integration`. Do **not** open a child task PR (worktree→branch→PR→merge)
   for a small review fix — child PRs are for *task* work, not for tackling review
   comments on the finished cycle. (The integration branch is a feature branch, not
   `main`, so committing to it is allowed; the "one PR per task / branch off
@@ -739,7 +739,7 @@ this task's PR `<n>`:
 - **How:** spawn a per-task-style agent **in the integration worktree** to run the
   same Monitor pass (JUDGE BEFORE YOU ACT + NO SILENT FIXES apply — judge each comment,
   fix the valid ones on the integration branch, reply to all), then push
-  `hsb/<slug>-integration` directly. The top orchestrator never fixes inline.
+  `cadence/<slug>-integration` directly. The top orchestrator never fixes inline.
   **Never merge it.**
   - Exception: if a plan-PR comment demands *substantial new feature work* (not a small
     fix), treat that as a new task — its own descriptive branch + child PR into

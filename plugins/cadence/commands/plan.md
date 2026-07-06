@@ -3,7 +3,7 @@ description: Plan a dependency-aware, parallel-safe development cycle from a tas
 argument-hint: "<task list | Linear key | Jira key | path to plan doc>  (leave empty to be prompted)"
 ---
 
-Load and follow the `cycle-planner` skill (plugin `hsb`) to produce a
+Load and follow the `cadence-planner` skill (plugin `cadence`) to produce a
 dependency-aware, parallel-safe development **cycle plan**. This is a **plan-only
 handoff** — do NOT implement tasks or dispatch worker agents.
 
@@ -27,7 +27,7 @@ Resolve the input source before planning:
 
 ## What to do
 
-Run the full `cycle-planner` skill workflow on the resolved tasks:
+Run the full `cadence-planner` skill workflow on the resolved tasks:
 1. Normalize tasks to stable IDs (T1, T2, …) with summaries and stated deps.
 2. **Deep codebase analysis** — spawn parallel `Explore` subagents to compute each
    task's touch set (creates / edits / reads / shared surfaces).

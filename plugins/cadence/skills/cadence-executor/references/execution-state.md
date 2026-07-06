@@ -9,7 +9,7 @@ own state without racing the others (parallel agents writing one shared JSON wou
 clobber each other):
 
 ```
-.hsb/cycles/<YYYYMMDD-HHMM>-<6char-hash>-<slug>-cycle/
+.cadence/cycles/<YYYYMMDD-HHMM>-<6char-hash>-<slug>-cycle/
   run.json            ← ORCHESTRATOR-owned (the top loop is the only writer)
   tasks/<id>.json     ← TASK-AGENT-owned (that task's agent is the only writer)
 ```
@@ -22,12 +22,12 @@ A task's status source of truth is its `tasks/<id>.json` (absent file = `pending
 `run.json` holds the roster + schedule and a cached last-reported status used only for
 gating.
 
-**Locate (every invocation):** glob `.hsb/cycles/*-<slug>-cycle/run.json`, pick the
+**Locate (every invocation):** glob `.cadence/cycles/*-<slug>-cycle/run.json`, pick the
 dir whose `run.json.planPath` equals the current plan and isn't complete (newest
 datetime prefix wins); only create a new dir if none matches. The name is NOT
 reconstructable from the slug alone — always locate, never blindly re-create.
 
-**Setup:** create `.hsb/` and ensure `.hsb/` is in the repo `.gitignore` (this state
+**Setup:** create `.cadence/` and ensure `.cadence/` is in the repo `.gitignore` (this state
 must never be committed onto a feature branch).
 
 ## `run.json` (orchestrator-owned)
@@ -35,15 +35,15 @@ must never be committed onto a feature branch).
 ```json
 {
   "slug": "matchmaking-followups",
-  "runDir": ".hsb/cycles/20260625-1430-a1b2c3-matchmaking-followups-cycle",
+  "runDir": ".cadence/cycles/20260625-1430-a1b2c3-matchmaking-followups-cycle",
   "runHash": "a1b2c3",
   "planPath": "docs/plans/proposed/20260625-1430-matchmaking-followups-ABC-1234.md",
   "createdAt": "2026-06-23T12:00:00Z",
   "ghLogin": "hugoseabra",
   "repo": "org/repo",
   "preflight": { "ghAuth": "ok", "mcp": { "Linear": "ok" }, "passedAt": "2026-06-23T12:00:30Z" },
-  "integrationBranch": "hsb/matchmaking-followups-integration",
-  "integrationWorktree": ".claude/worktrees/hsb-matchmaking-followups-integration",
+  "integrationBranch": "cadence/matchmaking-followups-integration",
+  "integrationWorktree": ".claude/worktrees/cadence-matchmaking-followups-integration",
   "planPrNumber": 1200,
   "planPrUrl": "https://github.com/org/repo/pull/1200",
   "planPrStatus": "draft",
@@ -114,9 +114,9 @@ then uses it to pick the Implement agent's model. `agentKind` ∈
   "deps": [],
   "status": "open",
   "complexity": "medium",
-  "branch": "hsb/matchmaking-followups-t1-add-reply-correlation-matcher",
-  "baseBranch": "hsb/matchmaking-followups-integration",
-  "worktreePath": ".claude/worktrees/hsb-matchmaking-followups-t1-add-reply-correlation-matcher",
+  "branch": "cadence/matchmaking-followups-t1-add-reply-correlation-matcher",
+  "baseBranch": "cadence/matchmaking-followups-integration",
+  "worktreePath": ".claude/worktrees/cadence-matchmaking-followups-t1-add-reply-correlation-matcher",
   "prNumber": 1203,
   "prUrl": "https://github.com/org/repo/pull/1203",
   "isDraft": true,

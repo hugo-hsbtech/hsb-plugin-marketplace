@@ -9,13 +9,13 @@
   },
   "plugins": [
     {
-      "name": "hsb",
-      "description": "Personal workflow plugin: plan dependency-aware parallel development cycles (cycle-planner) and drive them autonomously to merged PRs (cycle-executor).",
+      "name": "cadence",
+      "description": "Cadence — plan dependency-aware parallel development cycles (cadence-planner) and drive them autonomously to merged PRs (cadence-executor).",
       "author": {
         "name": "Hugo Seabra"
       },
       "category": "productivity",
-      "source": "./plugins/hsb"
+      "source": "./plugins/cadence"
     }
   ]
 }

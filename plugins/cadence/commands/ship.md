@@ -1,9 +1,9 @@
 ---
 description: Autonomously execute a parallel cycle plan — flows end to end (no merge gates), per task drives worktree→branch→PR (stacked on its blocker, or integration) then monitors comments/CI/conflicts until a human merges. Never pushes to main; never merges unless the user explicitly authorizes it.
-argument-hint: "<path to a cycle-plan .md (docs/plans/proposed/<datetime>-<slug>-<task-id>.md, or leave empty to use the plan in context / run /hsb:planner first)>"
+argument-hint: "<path to a cycle-plan .md (docs/plans/proposed/<datetime>-<slug>-<task-id>.md, or leave empty to use the plan in context / run /cadence:plan first)>"
 ---
 
-Load and follow the `cycle-executor` skill (plugin `hsb`) to autonomously execute
+Load and follow the `cadence-executor` skill (plugin `cadence`) to autonomously execute
 a parallel cycle plan. This **implements and drives PRs to merge-ready and FLOWS end
 to end** — it never freezes a task waiting for another's PR to merge (dependencies are
 expressed by PR base: stacked on a single blocker, or targeting integration for 0/2+
@@ -23,16 +23,16 @@ Resolve the plan:
   `docs/plans/proposed/<YYYYMMDD-HHMM>-<slug-of-proposed>-<task-id>.md`); take the
   canonical `slug` from the plan's metadata header, not the filename.
 - **Empty, but a wave schedule is already in context** → use it.
-- **Empty with no plan** → run `/hsb:planner` first (or ask the user for tasks).
+- **Empty with no plan** → run `/cadence:plan` first (or ask the user for tasks).
   Do not invent tasks.
 
 ## What to do
 
-Follow the `cycle-executor` skill end to end. **You run as a thin top orchestrator
+Follow the `cadence-executor` skill end to end. **You run as a thin top orchestrator
 that delegates each task to its own per-task orchestrator agent — you don't
 implement, monitor, fix, or write task state yourself.**
 1. Locate-or-create the run **state directory**
-   `.hsb/cycles/<YYYYMMDD-HHMM>-<6char-hash>-<slug>-cycle/` (`run.json` +
+   `.cadence/cycles/<YYYYMMDD-HHMM>-<6char-hash>-<slug>-cycle/` (`run.json` +
    `tasks/<id>.json`; glob `*-<slug>-cycle/run.json` + matching `planPath` to resume;
    per `references/execution-state.md`). Open the integration branch + plan PR.
 2. **Each tick, spawn one `Agent` per IDLE active task** (no agent in flight) in a
@@ -45,7 +45,7 @@ implement, monitor, fix, or write task state yourself.**
    don't run analysis on a cheap model. Spec/implement/fix agents run in the background.
    Each agent
    resumes from its `tasks/<id>.json`, owns a **durable git worktree** with a
-   **descriptive** `hsb/<slug>-t<id>-<task-slug>` branch (the slug reflects what the
+   **descriptive** `cadence/<slug>-t<id>-<task-slug>` branch (the slug reflects what the
    task does) off its **base** — the integration branch (0/2+ blockers) or its **single
    blocker's branch** (stacked). It advances its task one
    step: spec (superpowers brainstorming→writing-plans, decides complexity) → implement

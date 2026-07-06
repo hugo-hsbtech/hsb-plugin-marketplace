@@ -1,4 +1,4 @@
-# PR body templates (execute-cycles)
+# PR body templates (cadence-executor)
 
 Write for a human who has **not** been following the cycle. Be didactic and succinct:
 say what changed and how to test it in plain language, and don't bury the reader in

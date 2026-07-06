@@ -1,7 +1,7 @@
-# hsb — Claude Code plugin marketplace
+# hsb — Claude Code plugins
 
-Hugo Seabra's personal Claude Code plugins. Ships one plugin, **`hsb`**, a
-**plan → execute** pipeline for dependency-aware, parallel-safe development cycles.
+Hugo Seabra's Claude Code plugin marketplace. It ships **Cadence** — a
+**plan → ship** pipeline for dependency-aware, parallel-safe development cycles.
 
 ## Install
 
@@ -9,25 +9,25 @@ In Claude Code:
 
 ```
 /plugin marketplace add hugo-hsbtech/hsb-plugin-marketplace
-/plugin install hsb@hsb
+/plugin install cadence@hsb
 ```
 
-The first command registers this marketplace; the second installs the `hsb` plugin
-from it. Pull updates later with `/plugin marketplace update hsb`.
+The first command registers this marketplace (named `hsb`); the second installs the
+`cadence` plugin from it. Pull updates later with `/plugin marketplace update hsb`.
 
-## What's inside
+## Cadence — what's inside
 
 | Command | Skill | What it does |
 |---|---|---|
-| `/hsb:planner <tasks>` | `cycle-planner` | Analyzes a task list (or a Linear/Jira issue) against your codebase, computes each task's touch set + real dependencies, and schedules the work into parallel **waves**. Plan-only — it writes a cycle-plan doc and stops. |
-| `/hsb:execute-cycles <plan>` | `cycle-executor` | Consumes a cycle-plan doc and drives every task to a merged PR — one worktree, branch, and PR per task, stacked by dependency — monitoring reviews, CI, and conflicts on a scheduled loop until a human merges. |
+| `/cadence:plan <tasks>` | `cadence-planner` | Analyzes a task list (or a Linear/Jira issue) against your codebase, computes each task's touch set + real dependencies, and schedules the work into parallel **waves**. Plan-only — it writes a cycle-plan doc and stops. |
+| `/cadence:ship <plan>` | `cadence-executor` | Consumes a cycle-plan doc and drives every task to a merged PR — one worktree, branch, and PR per task, stacked by dependency — monitoring reviews, CI, and conflicts on a scheduled loop until a human merges. |
 
-### `/hsb:planner`
+### `/cadence:plan`
 
 Pass a task list, a tracker key, or a plan-doc path:
 
 ```
-/hsb:planner
+/cadence:plan
 - Add reply-correlation matcher
 - Wire matcher into the inbound pipeline (depends on the matcher)
 - Add a metrics dashboard
@@ -37,10 +37,10 @@ It computes dependencies and write-write conflicts, levels the tasks into waves,
 writes a wave schedule to `docs/plans/proposed/<timestamp>-<slug>.md`. It never
 implements or dispatches — planning only.
 
-### `/hsb:execute-cycles`
+### `/cadence:ship`
 
 ```
-/hsb:execute-cycles docs/plans/proposed/20260706-1200-my-cycle.md
+/cadence:ship docs/plans/proposed/20260706-1200-my-cycle.md
 ```
 
 It opens an **integration branch** + a draft plan PR, then one PR per task (stacked on
@@ -62,17 +62,17 @@ its blocker, or targeting integration), and keeps monitoring until you merge.
 ## Repository layout
 
 ```
-.claude-plugin/marketplace.json    this marketplace → the hsb plugin
-plugins/hsb/
+.claude-plugin/marketplace.json    the `hsb` marketplace → the cadence plugin
+plugins/cadence/
   .claude-plugin/plugin.json        plugin manifest (name / version / author)
-  commands/                         /hsb:planner, /hsb:execute-cycles (thin entrypoints)
+  commands/                         /cadence:plan, /cadence:ship (thin entrypoints)
   skills/
-    cycle-planner/                  planning behavior + plan-doc template
-    cycle-executor/                 execution behavior + state schema + PR template
+    cadence-planner/                  planning behavior + plan-doc template
+    cadence-executor/                 execution behavior + state schema + PR template
 ```
 
 The plugin is entirely Markdown — there is no build, lint, or test step.
 
 ## Author
 
-Hugo Seabra · <contato.hsbtec@gmail.com>
+Hugo Seabra

@@ -1,5 +1,5 @@
 ---
-name: cycle-planner
+name: cadence-planner
 description: >
   Turn a list of tasks (or one task with sub-tasks) into a dependency-aware,
   parallel-safe development cycle plan that a project-management / orchestration
@@ -12,7 +12,7 @@ description: >
   "wave plan", "parallelize these tickets", "build a cycle plan", "dependency
   analysis of these tasks", or pastes a task list / Linear issue / Jira issue /
   plan doc and asks how to run them in parallel. Also reachable via the
-  /hsb:planner command, which passes inline task input straight into this skill.
+  /cadence:plan command, which passes inline task input straight into this skill.
   Do NOT use to actually implement tasks or dispatch agents — this only produces
   the plan.
 ---

@@ -1,5 +1,5 @@
 # Claude Code cycle-execution state — never commit (see CLAUDE.md)
-.hsb/
+.cadence/
 
 # Local git worktrees created during execution
 .claude/worktrees/
