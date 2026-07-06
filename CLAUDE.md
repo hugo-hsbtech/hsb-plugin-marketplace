@@ -66,6 +66,10 @@ Task status flow: `pending → specifying → specified → implementing → ope
 
 When a single change spans several types, bump by the highest that applies. State the resulting version in the change summary. If the future repo adds a `CHANGELOG.md`, record the bump and its reason there too.
 
+## Documentation per plugin (philosophy)
+
+**Every plugin ships its own deep-dive doc at `plugins/<name>/README.md`** — the comprehensive, human-facing reference for that plugin (concepts, worked examples, diagrams, command reference, state model, FAQ). The repo-root `README.md` stays a thin marketplace index that points into each plugin's doc. The per-plugin README is *documentation only*: the `SKILL.md`/reference files remain the source of truth for behavior, so keep the doc in sync when behavior changes — but editing the doc alone does **not** require a version bump (it changes no skill behavior or contract). Cadence's is `plugins/cadence/README.md`.
+
 ## Conventions when editing skills
 
 - **Keep commands thin, behavior in skills.** A `commands/*.md` file resolves arguments and loads a skill; don't duplicate skill logic into it.
