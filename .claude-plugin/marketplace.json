@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "hsb",
+  "description": "Hugo Seabra's Claude Code plugins — dependency-aware, parallel-safe development-cycle planning and autonomous execution.",
+  "owner": {
+    "name": "Hugo Seabra",
+    "email": "contato.hsbtec@gmail.com",
+    "url": "https://github.com/hugo-hsbtech/hsb-plugin-marketplace"
+  },
+  "plugins": [
+    {
+      "name": "hsb",
+      "description": "Personal workflow plugin: plan dependency-aware parallel development cycles (cycle-planner) and drive them autonomously to merged PRs (cycle-executor).",
+      "author": {
+        "name": "Hugo Seabra"
+      },
+      "category": "productivity",
+      "source": "./plugins/hsb"
+    }
+  ]
+}

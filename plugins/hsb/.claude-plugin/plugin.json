@@ -1,0 +1,19 @@
+{
+  "name": "hsb",
+  "version": "2.3.1",
+  "description": "Personal workflow plugin for Hugo Seabra. A plan → execute pipeline for parallel development cycles: cycle-planner schedules dependency-aware waves; cycle-executor drives each task to a merged PR.",
+  "author": {
+    "name": "Hugo Seabra",
+    "email": "contato.hsbtec@gmail.com"
+  },
+  "homepage": "https://github.com/hugo-hsbtech/hsb-plugin-marketplace",
+  "repository": "https://github.com/hugo-hsbtech/hsb-plugin-marketplace",
+  "keywords": [
+    "workflow",
+    "orchestration",
+    "parallel",
+    "pull-requests",
+    "planning",
+    "productivity"
+  ]
+}
