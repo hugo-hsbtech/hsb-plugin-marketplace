@@ -78,6 +78,8 @@ Task status flow: `pending → specifying → specified → implementing → ope
 
 When a single change spans several types, bump by the highest that applies. State the resulting version in the change summary. If the future repo adds a `CHANGELOG.md`, record the bump and its reason there too.
 
+**Every version bump MUST also create a git tag** on the commit that contains the bump, and the tag MUST be pushed together with the commit. Tags are plugin-scoped (the marketplace can host several plugins, each with its own version): `<plugin>-v<MAJOR.MINOR.PATCH>`, e.g. `cadence-v3.2.0`. Use an annotated tag whose message is a one-line summary of the change (`git tag -a cadence-v3.2.0 -m "…"`), then `git push origin <tag>` (or push with `--follow-tags`). A bump without its tag is incomplete — if you find a bumped version with no matching tag, backfill the tag on the commit that introduced that version.
+
 ## Documentation per plugin (philosophy)
 
 **Every plugin ships its own deep-dive doc at `plugins/<name>/README.md`** — the comprehensive, human-facing reference for that plugin (concepts, worked examples, diagrams, command reference, state model, FAQ). The repo-root `README.md` stays a thin marketplace index that points into each plugin's doc. The per-plugin README is *documentation only*: the `SKILL.md`/reference files remain the source of truth for behavior, so keep the doc in sync when behavior changes — but editing the doc alone does **not** require a version bump (it changes no skill behavior or contract). Cadence's is `plugins/cadence/README.md`.

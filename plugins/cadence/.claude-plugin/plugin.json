@@ -1,6 +1,6 @@
 {
   "name": "cadence",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "Cadence — a plan → ship pipeline for parallel development cycles. cadence-planner schedules dependency-aware waves; cadence-executor drives each task to a merged PR. REQUIRES the superpowers plugin (checked at preflight); optionally uses the graphifyy CLI for cheaper, deterministic code analysis.",
   "author": {
     "name": "Hugo Seabra",
