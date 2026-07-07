@@ -143,6 +143,7 @@ then uses it to pick the Implement agent's model. `agentKind` ∈
       "replyUrl": "https://github.com/org/repo/pull/1203#discussion_r882140",
       "threadResolved": true }
   ],
+  "reviewerFixRounds": { "<reviewer-login>": 2 },
   "decisionLog": [
     {
       "decision": "Reply matching strategy",
@@ -221,11 +222,18 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
 - `answeredComments` — `{commentId, threadId, verdict, replyUrl, threadResolved}` per
   handled comment. `replyUrl` is proof the reply posted (NO SILENT FIXES). For an
   agreed-and-fixed item, `threadResolved: true` records that the review thread was
-  resolved (GraphQL `resolveReviewThread`) so an automated reviewer (e.g. Macroscope)
+  resolved (GraphQL `resolveReviewThread`) so an automated reviewer
   sees it as solved — a reply alone doesn't signal resolution. Declined/clarify items
   have `threadResolved: false` (left open for the human). Recorded only after the reply
   is confirmed, so the agent never double-replies, misses one, or marks a fix handled
   without a visible reply + resolution.
+- `reviewerFixRounds` — per-reviewer count of completed fix→re-request rounds on this
+  PR (REVIEW CONVERGENCE BOUND in `task-agent.md`). After **3** rounds with the same
+  reviewer still returning new findings, the agent stops re-requesting that reviewer,
+  posts one summary comment, and parks the remaining findings for the human — this is
+  what bounds the fix → re-review churn loop with automated reviewers. Optional field;
+  absent means zero rounds. Human comments and other reviewers are unaffected by the
+  counter.
 
 ## Resume logic (each wakeup — top orchestrator)
 0. **Locate** the run dir (glob `*-<slug>-cycle/run.json`, match `planPath`) — never

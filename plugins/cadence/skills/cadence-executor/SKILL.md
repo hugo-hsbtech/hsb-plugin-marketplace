@@ -561,10 +561,14 @@ its `tasks/<id>.json` and does only the step its `status` calls for — **Spec**
 (worktree + descriptive branch off its base; verify-and-extend the plan brief,
 graphify-first; decide `complexity`; fused straight into implement for
 `trivial`/`low`) → **Implement** (TDD; green gate; complexity-scaled pre-push
-self-review; open its own PR against its `baseBranch`, draft unless safe) →
+self-review — run EXACTLY ONCE, only the lint/tests gate is re-run after fixes,
+never a second `/code-review`; open its own PR against its `baseBranch`, draft
+unless safe) →
 **Monitor pass** (ONE GraphQL fetch of all signals; JUDGE BEFORE YOU ACT on every
 comment/review; NO SILENT FIXES — verified `gh` replies with captured URLs; SIGNAL
-RESOLUTION — resolve fixed threads + re-request the reviewer; CI fixes; rebases
+RESOLUTION — resolve fixed threads + re-request the reviewer, bounded by the
+REVIEW CONVERGENCE BOUND: max 3 fix rounds per reviewer, then a summary comment
+and park for the human; CI fixes; rebases
 onto its advancing base) → **Cleanup** on merge, then it dies. It is the sole
 writer of its `tasks/<id>.json`, syncs its own tracker issue on every transition,
 and never touches `main` or another task's branch/PR.
@@ -619,6 +623,14 @@ and never touches `main` or another task's branch/PR.
 - A task PR whose base is `main` is a defect: re-target it to its correct base
   (`gh pr edit <n> --base <baseBranch>` — integration or its blocker's branch) —
   never let task work merge straight to `main`.
+- **Review loops are bounded — churn is a defect, not diligence.** The pre-push
+  self-review runs exactly once (after fixes, only the lint/format/tests gate is
+  re-run — never another `/code-review`), and the monitor loop stops re-requesting
+  a reviewer after 3 fix rounds (`reviewerFixRounds`), posting a summary comment
+  and parking that reviewer's remaining findings for the human. An endless
+  review→fix→review sequence that keeps the cycle from advancing violates this
+  rule. Neither cap ever blocks fixing genuinely broken code (red CI, conflicts,
+  real bugs).
 - **Never conclude "no change / awaiting merge" from a merged-only check.** The
   change-detection snapshot exists to decide *whether to spawn*, not to describe PR
   health — the spawned per-task agent's Monitor pass (which pulls `reviewDecision` +

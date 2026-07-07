@@ -443,7 +443,11 @@ scaled to complexity:
 | `low` / `medium` | `/code-review low` |
 | `high` | `/code-review high` |
 
-Findings are judged, not blindly obeyed; real ones are fixed and the gate re-run.
+Findings are judged, not blindly obeyed; real ones are fixed and the gate re-run. The
+self-review runs **exactly once** — after fixes, only the lint/format/tests gate is
+re-run, never a second `/code-review`. (A review at this depth almost always finds
+*something* new, so re-reviewing after every fix would loop forever and the task would
+never open its PR.)
 
 ---
 
@@ -461,6 +465,15 @@ evaluate on the merits* — never a command:
 real, *verified-posted* `gh` reply (URL captured) before it counts as handled. Agreed-and-
 fixed items also resolve their thread and re-request the reviewer. This is separate from
 the pre-push self-review above — that one runs before the PR exists.
+
+**Bounded fix rounds (review convergence).** An automated reviewer re-reviews every push
+and usually finds *something* new each time, so fix → re-request → new review could churn
+forever. Cadence caps it at **3 fix rounds per reviewer** (tracked per task in
+`reviewerFixRounds`): after that, the agent stops re-requesting that reviewer, posts one
+summary comment (what was fixed, what was declined and why), and parks the remaining
+findings for the human — the PR goes quiet and the adaptive backoff takes over. The cap
+is per reviewer (humans and other reviewers are unaffected) and never blocks fixing
+genuinely broken code — red CI, conflicts, and real bugs are always fixed.
 
 ---
 

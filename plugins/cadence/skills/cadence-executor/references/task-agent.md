@@ -120,8 +120,18 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
    - **`high`** → run `/code-review high`.
 
    Treat findings as suggestions to judge on the merits (same JUDGE-BEFORE-YOU-ACT
-   bar as PR comments): fix the real ones and re-run the gate; a clean/decline-only
-   pass just proceeds. This self-review is *before the PR exists* and is distinct
+   bar as PR comments): fix the real ones and re-run the lint/format/tests gate; a
+   clean/decline-only pass just proceeds.
+
+   > #### SELF-REVIEW RUNS EXACTLY ONCE (one review, one fix pass, then the PR)
+   > Do **NOT** run `/code-review` again on the fixed diff. A review at this depth
+   > almost always finds *something* new, so re-reviewing after every fix loops
+   > forever (review → fix → review → …) and the task never reaches `open` — the
+   > cycle visibly stalls. After fixing, the only thing you re-run is the
+   > lint/format/tests **gate**. Anything subtle the single pass missed is exactly
+   > what the PR's human/bot reviewers are for.
+
+   This self-review is *before the PR exists* and is distinct
    from the monitor/fix loop that answers reviewer comments on an already-open PR.
 5. **PR (one per task, based on this task's `baseBranch`).** Commit on *this
    task's* branch, `git push -u origin <branch>` (this branch only, never main,
@@ -256,7 +266,7 @@ the task's own worktree; writes its own `tasks/<id>.json`. For this task's PR `<
      (it prints the comment URL — record it).
 
    > #### SIGNAL RESOLUTION — a reply is NOT a resolution (this is why a bot
-   > reviewer like **Macroscope** "doesn't understand the review was solved")
+   > reviewer often "doesn't understand the review was solved")
    > A reviewer — especially an automated one — tracks its findings by **thread
    > resolution state and review re-requests**, not by reading your prose reply.
    > After you **agree-and-fix** an item, you MUST actively signal it's resolved,
@@ -278,6 +288,32 @@ the task's own worktree; writes its own `tasks/<id>.json`. For this task's PR `<
    >    fixed, post a concise summary comment listing each finding → the
    >    commit/line that resolved it, and resolve the thread. Don't consider the PR
    >    review-clean until the reviewer's state reflects it.
+
+   > #### REVIEW CONVERGENCE BOUND (max 3 fix rounds per reviewer, then park)
+   > An automated reviewer re-reviews every push and will usually emit *something*
+   > new each time, so fix → re-request → new review → fix … can cycle forever —
+   > the PR churns, the run never quiets, and the backoff never engages. Bound it
+   > **per reviewer**:
+   > 1. Track rounds in `tasks/<id>.json` → `reviewerFixRounds[<reviewer-login>]`.
+   >    A "round" = one monitor tick in which you pushed agreed fixes for that
+   >    reviewer's findings and re-requested (or re-triggered) them.
+   > 2. **Rounds 1–3:** normal flow — judge → fix/decline → reply → resolve →
+   >    re-request.
+   > 3. **After round 3, if the same reviewer still returns new findings: STOP
+   >    re-requesting that reviewer.** Still judge each outstanding item and reply
+   >    (JUDGE BEFORE YOU ACT applies as always — fix anything genuinely broken),
+   >    but post ONE summary comment instead of another re-request: the rounds
+   >    completed, what was fixed (commit SHAs), what was declined and why, and
+   >    that this reviewer's remaining findings now await the human's judgment.
+   > 4. Report the honest `prState` (e.g. `changes_requested`) with a note like
+   >    `"review loop parked after 3 rounds with <reviewer> — human decision
+   >    needed"`. With no re-request there is no new review, so the PR goes quiet
+   >    and the orchestrator's backoff takes over instead of burning ticks on churn.
+   >
+   > The bound is per reviewer, not per PR: a comment from a **human** or a
+   > **different** reviewer is handled normally regardless of the counter. And the
+   > cap stops *re-request churn only* — red CI, merge conflicts, and genuinely
+   > broken code are always fixed, whatever the round count.
 
    An item is "addressed" once it has been **judged, fixed-or-declined, replied to,
    AND its resolution signaled** (fixed → thread resolved + re-request; declined →
