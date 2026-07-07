@@ -14,7 +14,7 @@ Then install any plugin below with `/plugin install <name>@hsb`.
 
 | Plugin | Install | What it does | Docs |
 |---|---|---|---|
-| **Cadence** | `/plugin install cadence@hsb` | A plan → ship pipeline for dependency-aware, parallel development cycles. `/cadence:plan` schedules tasks into parallel waves; `/cadence:ship` drives each to a merged PR. | [plugins/cadence](plugins/cadence/README.md) |
+| **Cadence** | `/plugin install cadence@hsb` | A plan → ship pipeline for dependency-aware, parallel development cycles. `/cadence:plan` schedules tasks into parallel waves; `/cadence:ship` drives each to a merged PR. **Requires the `superpowers` plugin**; optional [`graphifyy`](https://github.com/Graphify-Labs/graphify) for cheaper analysis. | [plugins/cadence](plugins/cadence/README.md) |
 
 Each plugin ships its own deep-dive documentation — follow the **Docs** link for
 concepts, command reference, and examples.

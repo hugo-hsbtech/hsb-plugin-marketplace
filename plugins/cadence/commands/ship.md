@@ -26,22 +26,39 @@ Resolve the plan:
 - **Empty with no plan** → run `/cadence:plan` first (or ask the user for tasks).
   Do not invent tasks.
 
+## Dependencies (checked at the skill's preflight gate)
+
+- **superpowers plugin — REQUIRED.** The per-task agents run `superpowers:*` skills
+  end to end. If it isn't installed, the preflight STOPS the run with install
+  instructions — never start without it.
+- **graphifyy — optional.** When the `graphify` CLI (or `graphify-out/graph.json`)
+  is present, spec agents ground their code checks in the local knowledge graph
+  (cheaper + deterministic). Absent → normal file-reading analysis.
+
 ## What to do
 
 Follow the `cadence-executor` skill end to end. **You run as a thin top orchestrator
 that delegates each task to its own per-task orchestrator agent — you don't
-implement, monitor, fix, or write task state yourself.**
+implement, monitor, fix, or write task state yourself.** Each spawned agent reads
+the skill's `references/task-agent.md` (pass its path in the brief) — that file is
+the per-task playbook.
 1. Locate-or-create the run **state directory**
    `.cadence/cycles/<YYYYMMDD-HHMM>-<6char-hash>-<slug>-cycle/` (`run.json` +
    `tasks/<id>.json`; glob `*-<slug>-cycle/run.json` + matching `planPath` to resume;
    per `references/execution-state.md`). Open the integration branch + plan PR.
-2. **Each tick, spawn one `Agent` per IDLE active task** (no agent in flight) in a
-   single message — `pending`→spec, `specified`→implement, `open`→monitor,
-   `merged`→cleanup; **skip any task whose agent is still running**
+2. **Each tick: change detection first, then spawn only where there is work.** Run
+   ONE batched read-only GraphQL call over all the cycle's open PRs and diff it
+   against `run.json.prSnapshot` — an idle `open` task with **no delta spawns
+   nothing**. Then spawn one `Agent` per IDLE active task with work, in a single
+   message — `pending`→spec (verifies-and-extends the plan brief instead of
+   re-analyzing; **fuses straight into implement for `trivial`/`low` complexity**),
+   `specified`→implement, `open` **with a delta**→monitor, `merged`→cleanup
+   (recovery only); **skip any task whose agent is still running**
    (`specifying`/`implementing`/`fixing`) so you never tick a PR mid-round-trip
    (idle-gating). **Pick each agent's model by phase:** spec/analysis → **Opus, high
    effort** (always); implement → by the complexity the spec found (high → Opus/medium,
-   medium/low → Sonnet); monitor/cleanup → Sonnet. Don't run everything on Opus, and
+   medium → Sonnet; trivial/low is normally absorbed by the fused spec agent);
+   monitor/cleanup → Sonnet. Don't run everything on Opus, and
    don't run analysis on a cheap model. Spec/implement/fix agents run in the background.
    Each agent
    resumes from its `tasks/<id>.json`, owns a **durable git worktree** with a
@@ -66,9 +83,12 @@ implement, monitor, fix, or write task state yourself.**
    → decline with a reasoned reply · ambiguous → ask) — never blindly obey; fix red CI;
    rebase onto its base as the base advances — all with **verified `gh` replies** (no
    silent fixes), until the **human merges**. On merge it cleans up and retires.
-5. Re-arm the **ScheduleWakeup loop (180s)** each turn; dispatch tasks as their base
-   branches appear (no merge gate). End the loop only when the **plan PR is merged into
-   `main`** and every task is `done`/`failed`.
+5. Re-arm the **adaptive ScheduleWakeup loop** each turn — 180s while hot (agents in
+   flight or changes detected), doubling per quiet tick up to `maxSeconds`
+   (default 1800) while everything is parked on humans; any activity snaps it back
+   to 180s. Dispatch tasks as their base branches appear (no merge gate). End the
+   loop only when the **plan PR is merged into `main`** and every task is
+   `done`/`failed`.
 
 Be conservative and honest: **by default never merge** (leave it to the human) — unless
 the user has explicitly authorized merging for a named task/wave/cycle, in which case

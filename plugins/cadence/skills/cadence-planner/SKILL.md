@@ -100,13 +100,31 @@ drive parallelization.
 
 ### 2. Deep codebase analysis (the expensive, important step)
 For each task, determine its **touch set** — the concrete files/modules it will
-create, edit, or depend on. Spawn analysis subagents in parallel (one per task,
+create, edit, or depend on.
+
+**Ground the analysis in a code graph when available (graphifyy — optional
+accelerator).** Before fanning out, check for the graphify CLI (`command -v
+graphify`) or an existing `graphify-out/graph.json`. If present, build/refresh the
+graph ONCE for the whole run — `graphify extract . --update` (local tree-sitter
+parse: deterministic, no LLM cost, nothing leaves the machine) — and tell every
+analysis subagent to query it FIRST: `graphify query "…"`, `graphify path A B`,
+`graphify explain <Symbol>` (or the graphify MCP tools). The graph answers
+imports/calls/inheritance/dependents deterministically, so subagents read only the
+files the graph points at instead of exploring by trial and error — it is also the
+strongest evidence for producer→consumer edges and shared-surface conflicts in
+step 3. If graphify is absent, run the analysis exactly as below by reading files —
+**graphify is never a requirement, and its absence never blocks or degrades the
+plan's completeness bar.**
+
+Spawn analysis subagents in parallel (one per task,
 or batch related tasks). **Run every analysis subagent on Opus, high effort** —
 analysis is where the leverage is; don't cheap out on it (`Agent` with
 `model: "opus"` and high reasoning effort; the `Explore` agent likewise). The
 subagent is already deep-reading the source, so make it return the requirement
 decomposition too — decomposition rides on work already happening, no extra hop.
-Prompt:
+Prompt (when graphify is available, prepend: "A code knowledge graph exists —
+query it with `graphify query/path/explain` before reading files, and cite graph
+edges as evidence in the touch set"):
 
 > "For this task: «summary», sourced from «plan.md Phase N» (read the FULL phase
 > body plus the doc's Desired End State, referenced design-doc/README promises, and
@@ -150,7 +168,9 @@ Merge three dependency sources into a single directed graph (edge A→B = "B dep
 on A / A must land first"):
 - **Declared** — stated deps + Linear/Jira blocker links.
 - **Producer→consumer** — task A `creates`/`edits` something task B `reads`
-  (new API, type, schema, module, migration). A→B.
+  (new API, type, schema, module, migration). A→B. When a graphify graph exists,
+  its import/call/dependent edges are the preferred evidence for these links —
+  cite the edge instead of inferring from prose.
 - **Write-write conflict** — A and B both `edit` the same file/region, or both
   touch the same `shared` surface. These have no inherent order, so impose an
   arbitrary deterministic order (lower ID first) to **serialize** them, and label
@@ -191,7 +211,10 @@ not by parsing the filename.
 Use the template in `references/cycle-plan-template.md`. The plan MUST contain: the
 task table, the dependency graph (Mermaid), the wave schedule with parallel
 groupings, a per-task **context brief** (touch set + **Requirements covered**
-checklist + acceptance criteria) so a fresh implementing agent can start cold, a
+checklist + acceptance criteria) so a fresh implementing agent can start cold —
+the executor's spec phase **consumes this brief directly** (it verifies and
+extends it rather than re-deriving the analysis), so the brief's completeness is
+what spares the executor from paying for this analysis a second time — plus a
 **Scope boundary — NOT doing / deferred** section, conflict/serialization notes, the
 critical path, and explicit handoff instructions.
 

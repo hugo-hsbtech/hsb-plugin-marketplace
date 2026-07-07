@@ -30,7 +30,10 @@ Resolve the input source before planning:
 Run the full `cadence-planner` skill workflow on the resolved tasks:
 1. Normalize tasks to stable IDs (T1, T2, …) with summaries and stated deps.
 2. **Deep codebase analysis** — spawn parallel `Explore` subagents to compute each
-   task's touch set (creates / edits / reads / shared surfaces).
+   task's touch set (creates / edits / reads / shared surfaces). If the **graphifyy**
+   CLI is installed (optional), refresh its knowledge graph once
+   (`graphify extract . --update`) and have subagents query it first — deterministic
+   dependency evidence at zero LLM cost; absent graphify, analyze by reading files.
 3. Build the dependency graph (declared + producer→consumer + write-write conflict).
 4. Schedule into parallel **waves** via topological levelling; compute the critical path.
 5. Emit the cycle plan using the skill's `references/cycle-plan-template.md`, writing

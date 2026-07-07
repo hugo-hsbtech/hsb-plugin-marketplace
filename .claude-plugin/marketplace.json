@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "cadence",
-      "description": "Cadence — plan dependency-aware parallel development cycles (cadence-planner) and drive them autonomously to merged PRs (cadence-executor).",
+      "description": "Cadence — plan dependency-aware parallel development cycles (cadence-planner) and drive them autonomously to merged PRs (cadence-executor). Requires the superpowers plugin; optionally accelerates analysis with the graphifyy CLI.",
       "author": {
         "name": "Hugo Seabra"
       },

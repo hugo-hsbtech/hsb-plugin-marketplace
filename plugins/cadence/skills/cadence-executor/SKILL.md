@@ -20,6 +20,9 @@ description: >
   /cadence:ship command (which loads this skill).
   When tasks are linked to Linear/Jira/etc., it mirrors each task's status into the
   tracker as it executes (In Progress → In Review → Done/Blocked).
+  REQUIRES the superpowers plugin (checked at preflight — the run STOPS with
+  install instructions if it is missing); optionally uses the graphifyy CLI
+  (code knowledge graph) to accelerate spec-phase analysis when installed.
   HARD RULES: one dedicated agent and one PR per task (never combine tasks into a
   shared branch/PR); a task PR targets its single blocker's branch, or the
   integration branch when it has zero or 2+ blockers — never main; never push or
@@ -36,6 +39,11 @@ each task to a merge-ready PR, fully autonomously except the merge itself. You a
 PM: you dispatch task agents, you keep PRs healthy, you don't merge (unless the user
 tells you to), and you never touch `main`. **The process FLOWS end to end — it never
 freezes a task waiting for another's PR to merge.**
+
+This file is the **top orchestrator's** playbook. The per-task agent's playbook —
+spec/implement phases, the Monitor pass, JUDGE BEFORE YOU ACT, NO SILENT FIXES, PR
+title/content conventions, tracker sync — lives in **`references/task-agent.md`**;
+every spawned agent is told to read it first. Keep the two in sync when editing.
 
 **Branch topology — flow via PR base, not merge gates (read first).** A cycle has ONE
 **integration branch** (`cadence/<slug>-integration`) that holds the plan/spec docs and is
@@ -92,11 +100,12 @@ what the task does.)
   or a human may merge it mid-flight and force a re-do. Un-draft (`gh pr ready`) only
   when settled; if new in-flight work starts, convert back to draft (`gh pr edit
   <n> --add-draft` / `gh pr ready --undo`) and say so in a comment.
-- **Monitoring is mandatory and self-sustaining while a PR is open.** Opening a PR
-  is NOT "done" — the job is done only when every PR is **merged + cleaned up**.
-  You keep re-checking (comments, reviews, CI, conflicts) and resolving issues on a
-  schedule until merge. See **Turn-end invariant** — you may not stop with an open
-  PR and no scheduled re-entry.
+- **Monitoring is mandatory and self-sustaining while a PR is open — but adaptive.**
+  Opening a PR is NOT "done" — the job is done only when every PR is **merged +
+  cleaned up**. You keep re-checking (comments, reviews, CI, conflicts) on a
+  schedule until merge, but the schedule **backs off while nothing changes** and a
+  quiet tick spawns nothing (see Change detection + Re-arm). See **Turn-end
+  invariant** — you may not stop with an open PR and no scheduled re-entry.
 - **One dedicated agent per task.** Every task in a wave is dispatched as its OWN
   parallel subagent in its OWN worktree. Never collapse multiple tasks into one
   agent, and never implement a task inline yourself. See dispatch step 2.
@@ -111,28 +120,25 @@ what the task does.)
   into a closely-related task's PR, but only with its own clearly-labeled section
   (task id, what/why, decision log) in that PR body, and the fold noted in state.
   When unsure, open a separate PR.
-- **Preflight gate before any work.** `gh` must be authenticated as the correct
-  user AND every required MCP server must be connected — verified and recorded in
-  state *before* a single task is dispatched. Abort the run if the gate fails. All
-  PR replies use real `gh` commands.
+- **Preflight gate before any work.** The **superpowers plugin must be installed**,
+  `gh` must be authenticated as the correct user, AND every required MCP server must
+  be connected — verified and recorded in state *before* a single task is
+  dispatched. Abort the run if the gate fails. All PR replies use real `gh` commands.
 - **Judge reviews, don't obey them.** Comments and reviews are *suggestions to
-  evaluate*, never commands to implement blindly. For each one, verify it against the
-  code and decide if it's correct, valuable, reasonable, and in-scope — then agree,
-  propose a better alternative, decline with a reasoned reply, or ask for
-  clarification. A wrong or out-of-scope suggestion is declined (with respect and
-  evidence), not implemented. See **Monitor pass → JUDGE BEFORE YOU ACT**.
-- **No silent fixes.** Whenever you change code in response to a review comment, a
-  review, red CI, or a conflict rebase, you MUST post a real `gh` reply/comment on
-  the PR *and verify it posted* (capture its URL) before treating the item as
-  handled. A pushed commit is never a substitute for a reply. Every item — whether
-  you implemented it or declined it — gets a posted, reasoned reply. See **Monitor
-  pass → NO SILENT FIXES**.
+  evaluate*, never commands to implement blindly. For each one the per-task agent
+  verifies it against the code and decides — agree, propose a better alternative,
+  decline with a reasoned reply, or ask for clarification. Full protocol: **JUDGE
+  BEFORE YOU ACT** in `references/task-agent.md`.
+- **No silent fixes.** Whenever code changes in response to a review comment, a
+  review, red CI, or a conflict rebase, the per-task agent MUST post a real `gh`
+  reply/comment on the PR *and verify it posted* (capture its URL) before treating
+  the item as handled. A pushed commit is never a substitute for a reply. Full
+  protocol: **NO SILENT FIXES** in `references/task-agent.md`.
 - **Mirror task status to the issue tracker.** If a task (or the cycle) is linked to
   Linear / Jira / GitHub Issues / Asana / any tracker, every internal status
-  transition is reflected back to that tool's issue automatically — moving the issue
-  through its workflow states and commenting the PR link — so the tracker is always
-  the truth a human sees. See **Issue-tracker status sync**. Never leave a linked
-  issue stale while its task moves.
+  transition is reflected back to that tool's issue automatically. Each per-task
+  agent syncs its own task's issue (table in `references/task-agent.md`); you sync
+  the parent/epic issue. Never leave a linked issue stale while its task moves.
 - **No external/paid mechanisms.** Monitoring is 100% in-session tools —
   `ScheduleWakeup` (internal re-entry), `gh`/`git` via `Bash`, and local `Agent`
   subagents. Never register a cron / scheduled cloud agent or any billable external
@@ -147,9 +153,9 @@ what the task does.)
   steers *asynchronously* — by replying here to the orchestrator, or via PR
   comments/reviews (which the monitor pass picks up and applies). The **only**
   reasons to stop and surface to the user are hard blockers that make autonomous
-  work impossible: no/invalid plan, `gh` not authenticated as the right user, or a
-  task whose gate can't go green (left as a draft PR with a blocker note). Anything
-  decidable, you decide.
+  work impossible: no/invalid plan, a missing required dependency (superpowers),
+  `gh` not authenticated as the right user, or a task whose gate can't go green
+  (left as a draft PR with a blocker note). Anything decidable, you decide.
 
 ## Turn-end invariant (READ THIS BEFORE ENDING ANY TURN)
 The single most common failure is stopping after PRs are opened and never coming
@@ -158,8 +164,9 @@ back to monitor. To make that impossible, end **every** turn by checking state:
 > **If ANY task is `status ∈ {pending, specifying, specified, implementing, open, fixing}` OR the plan PR
 > is not yet merged into `main`, the LAST action of this turn MUST be a
 > `ScheduleWakeup` call** (re-entering with the same `/cadence:ship
-> <plan-path>`). Only when every task is `done`/`failed` **and the plan PR has been
-> merged** may you end without scheduling — and then you write the final summary.
+> <plan-path>`, at the current adaptive interval — see Re-arm). Only when every
+> task is `done`/`failed` **and the plan PR has been merged** may you end without
+> scheduling — and then you write the final summary.
 
 You are never "finished" because you opened PRs, nor because all task PRs merged —
 the plan PR into `main` is the last gate. You are finished only when the task files
@@ -167,9 +174,9 @@ show no active task **and** the plan PR is merged. If you are about to produce a
 closing message while any task PR or the plan PR is still open, STOP and call
 `ScheduleWakeup` instead.
 
-**Also before ending any turn:** run the NO SILENT FIXES assertion — every comment/
-review/CI/conflict you acted on this turn must have a recorded `replyUrl` on the PR.
-Never end a turn having pushed a fix without posting (and verifying) its reply.
+**Also before ending any turn:** every comment/review/CI/conflict acted on this turn
+must have a recorded `replyUrl` on the PR (the per-task agents assert this; spot-check
+their summaries). Never end a turn having pushed a fix without a posted, verified reply.
 
 ## Inputs
 - A cycle plan: a path to a cycle-plan markdown produced by `/cadence:plan` — named
@@ -180,7 +187,7 @@ Never end a turn having pushed a fix without posting (and verifying) its reply.
   that `slug` for all `cadence/<slug>-*` branches and the cycle state directory (see State
   directory). Do NOT derive the slug by parsing the filename (the name is timestamped).
 - Parse: waves, per-task IDs, summaries, dependencies, and per-task context briefs
-  (touch sets, acceptance criteria).
+  (touch sets, requirements, acceptance criteria).
 
 ## State directory (survives across wakeups & sessions; split by owner)
 Monitoring spans hours-to-days and re-enters via scheduled wakeups, so persist
@@ -195,7 +202,7 @@ JSON would clobber each other):
 .cadence/cycles/<YYYYMMDD-HHMM>-<6char-hash>-<slug>-cycle/
   run.json            ← ORCHESTRATOR-owned: slug, planPath, integrationBranch,
                          planPr*, prTitlePattern, preflight, wave schedule,
-                         issueTracker, monitorIntervalSeconds, nextWakeupAt
+                         issueTracker, monitorBackoff, prSnapshot, nextWakeupAt
   tasks/<id>.json     ← TASK-AGENT-owned: that task's status, branch, worktreePath,
                          prNumber/Url, lastCheckedAt, answeredComments, decisionLog,
                          issue sync. Written ONLY by that task's own agent.
@@ -226,19 +233,25 @@ This skill runs as a **thin top orchestrator** that delegates each task to its o
 fix, or write task state — it only schedules and gates.
 
 - **Top orchestrator (you, the main loop):** preflight; create the integration
-  branch + plan PR; own `run.json`; each wakeup, spawn a per-task agent only for
-  every *idle* active task (one with **no agent in flight** — see Idle-gating);
-  gate/dispatch waves as blockers merge; manage the plan PR; call `ScheduleWakeup`.
-  It reads `tasks/<id>.json` to learn status but never writes them. Keep its own
-  console output minimal — the work belongs in the agents.
-- **Per-task orchestrator agent (one Agent per idle active task):** resumes from its
-  `tasks/<id>.json` and drives ITS task one step as far as it can right now — spec
-  (analysis/plan) → implement→PR if pre-PR, else monitor→fix→reply, else cleanup if
-  merged. It may spawn its own sub-agents (TDD/analysis via superpowers). It is the
-  **sole writer of its `tasks/<id>.json`**
-  and the one that does all `gh` work for its PR. It **dies when its PR is merged**
-  (after cleanup); the top orchestrator simply stops re-spawning it. Continuity across
-  ticks is the worktree + task file, not the process.
+  branch + plan PR; own `run.json`; each wakeup, run **change detection** (one
+  batched read-only GitHub call) and spawn a per-task agent only for every *idle
+  active* task **that has something to do** (see Idle-gating + Change detection);
+  gate/dispatch waves as base branches appear; manage the plan PR; call
+  `ScheduleWakeup` at the current adaptive interval. It reads `tasks/<id>.json` to
+  learn status but never writes them. Keep its own console output minimal — the
+  work belongs in the agents.
+- **Per-task orchestrator agent (one Agent per idle active task with work):**
+  reads `references/task-agent.md` (its full playbook — pass its path in every
+  brief), resumes from its `tasks/<id>.json`, and drives ITS task one step as far
+  as it can right now — spec (analysis/plan; **flows straight into implement→PR in
+  the same invocation when it finds `complexity` = `trivial`/`low`** — the fused
+  fast path) → implement→PR if pre-PR, else monitor→fix→reply, else cleanup if
+  merged. It may spawn its own sub-agents, but only for genuine unknowns (see the
+  playbook's verify-and-extend rule). It is the **sole writer of its
+  `tasks/<id>.json`** and the one that does all `gh` work for its PR. It **dies
+  when its PR is merged** (after cleanup); the top orchestrator simply stops
+  re-spawning it. Continuity across ticks is the durable worktree + task file, not
+  the process.
 
 ### Idle-gating: only monitor a PR when its task is settled and no agent is running
 A monitor tick on a PR is meaningful only when the task is **parked waiting on a
@@ -250,10 +263,11 @@ Acting on the PR during an in-flight round-trip is wasted work and races the pus
   block monitoring of other tasks' already-open PRs.
 - **Each tick, for a task with `agentInFlight = true`: SKIP it entirely** — don't
   spawn another agent and don't touch its PR. Its running agent owns it.
-- **Only spawn a monitor tick for a task whose status is `open` with no agent in
-  flight** (settled, PR up, awaiting human). `pending` → spawn a **spec** agent;
-  `specified` → spawn an **implement** agent; `merged` → spawn a cleanup agent;
-  `specifying`/`implementing`/`fixing` mean an agent is already in flight → skip.
+- **Only spawn a monitor tick for a task whose status is `open`, with no agent in
+  flight, AND whose PR snapshot changed** (see Change detection). `pending` → spawn
+  a **spec** agent; `specified` → spawn an **implement** agent; `merged` → resume an
+  interrupted cleanup; `specifying`/`implementing`/`fixing` mean an agent is already
+  in flight → skip.
 - **The implement round-trip does NOT also monitor.** An implement agent returns at
   PR-opened (`status = open`) without running a Monitor pass in the same invocation —
   nothing to react to on a PR it just created. The first monitor happens on a later
@@ -266,8 +280,40 @@ Acting on the PR during an in-flight round-trip is wasted work and races the pus
 > Why re-spawn each tick instead of one long-lived agent: monitoring spans days and
 > must survive session death, but an agent only lives for one turn. `ScheduleWakeup`
 > (main-loop) is the only durable re-entry, so the top orchestrator re-spawns each
-> task's agent every tick. Each agent invocation = "advance my task as far as
-> possible now, write my state, return."
+> task's agent every tick it has work. Each agent invocation = "advance my task as
+> far as possible now, write my state, return."
+
+### Change detection: one cheap read decides whether anything is spawned
+Spawning a monitor agent per open PR per tick just to learn "nothing changed" is the
+single biggest quota leak in a long run. Kill it with a snapshot diff:
+
+1. **One batched read-only GraphQL call** covering ALL of the cycle's open PRs
+   (task PRs + the plan PR), using aliases — per PR fetch only:
+   `updatedAt, headRefOid, mergedAt, isDraft, reviewDecision, mergeStateStatus,`
+   and the last commit's `statusCheckRollup { state }`:
+   ```
+   gh api graphql -f query='query{ repository(owner:"O",name:"R"){
+     t1: pullRequest(number:101){ ...prSnap }
+     t2: pullRequest(number:102){ ...prSnap }
+     plan: pullRequest(number:100){ ...prSnap } } }
+   fragment prSnap on PullRequest { updatedAt headRefOid mergedAt isDraft
+     reviewDecision mergeStateStatus
+     commits(last:1){nodes{commit{statusCheckRollup{state}}}} }'
+   ```
+2. **Diff against `run.json.prSnapshot[<taskId>]`.** Any field differs (or no
+   snapshot yet) → that PR has news → its task gets a monitor agent this tick
+   (if idle). All fields equal → **spawn nothing for that task** — record the tick
+   as quiet for it.
+3. **Store the fresh values in `prSnapshot`** every tick. **Re-baseline after an
+   agent acts:** when a monitor/fix agent completes, take a fresh snapshot of its PR
+   before storing, so the agent's own replies/pushes don't read as "news" next tick.
+4. This is **change detection, not triage**: the orchestrator only compares fields
+   read-only. It never interprets comments, never judges, never runs `gh` writes,
+   never touches a PR — the spawned per-task agent does the full Monitor pass
+   (step 0 onward) and remains the only actor on the PR.
+
+A fully quiet tick (no deltas, nothing in flight, nothing pending dispatch) costs
+one API call and zero spawns — then backs off the wakeup interval (see Re-arm).
 
 ### Model selection (by PHASE — analysis is always Opus; implementation by complexity)
 Spawned agents must NOT all inherit the orchestrator's Opus. The model is chosen by
@@ -276,18 +322,24 @@ not something assigned when the task was defined:
 
 | Phase / agent kind | What it does | Model + effort (`modelPolicy`) |
 |---|---|---|
-| **spec** (analysis / planning / specifying) | superpowers `brainstorming` + `writing-plans`, real codebase analysis in context; **decides this task's `complexity`** | **`opus`, effort `high`** — always, every task |
+| **spec** (analysis / planning / specifying) | verify-and-extend the plan brief, real codebase checks (graphify-first when available); **decides this task's `complexity`**; **fuses straight into implement for `trivial`/`low`** | **`opus`, effort `high`** — always, every task |
 | **implement** — `complexity: high` | TDD build of the most complex tasks | **`opus`, effort `medium`** |
-| **implement** — `complexity: medium`/`low`/`trivial` | TDD build of lighter tasks | **`sonnet`** (low effort for `low`/`trivial`) |
+| **implement** — `complexity: medium` | TDD build of lighter tasks | **`sonnet`** |
+| **implement** — `complexity: low`/`trivial` | normally absorbed by the fused spec agent; spawned separately only when a fused run was interrupted | **`sonnet`, effort `low`** |
 | **monitor / fix / cleanup** | read PR state, reply, small fixes, worktree teardown — light | **`sonnet`**, effort `low` |
 
 Rules:
 - **Any analysis/planning/specifying done via a subagent runs on `opus`, high
   effort** — that's where correctness is won. This includes the per-task spec agent
-  AND any sub-subagents it spawns to analyze the codebase.
+  AND any sub-subagents it spawns (which it spawns only for genuine unknowns, not
+  as ritual re-analysis — the plan brief is consumed, verified, and extended, never
+  re-derived from scratch).
 - **Complexity is set during the spec phase** (the spec agent writes `complexity` to
-  its `tasks/<id>.json` as a finding), NOT pre-assigned by the planner. The
-  *implement* agent is then spawned at `modelPolicy[complexity]`.
+  its `tasks/<id>.json` as a finding), NOT pre-assigned by the planner. For
+  `high`/`medium` the *implement* agent is then spawned at `modelPolicy[complexity]`;
+  for **`trivial`/`low` the spec agent implements in the same invocation** (fused
+  fast path) — one spawn instead of two, no context re-derivation, and the small
+  change is built on the stronger model anyway.
 - The orchestrator sets `model`/effort when it spawns each agent via the Agent tool:
   spec → opus/high; implement → by the complexity the spec wrote; monitor/cleanup →
   the cheap `monitor` policy.
@@ -305,30 +357,52 @@ The run **must not begin execution** until every precondition below is verified 
 recorded in state under `preflight`. This is a gate, not a formality: if any
 required check fails, **STOP** (one of the few allowed hard stops), tell the user
 exactly what to fix, and do not dispatch anything. Only once `preflight.passedAt`
-is set may step 1 run. Re-verify the gate at the start of any wakeup that is about
-to dispatch a new wave (auth/MCP can drop between sessions).
+is set may step 1 run.
 
-1. **`gh` authenticated as the correct user.** Run `gh auth status`. Confirm it
+1. **Plugin dependencies.** Cadence does not work alone — check both:
+   - **superpowers (REQUIRED).** The per-task agents invoke `superpowers:*` skills
+     (`using-git-worktrees`, `writing-plans`, `brainstorming`,
+     `test-driven-development`, `executing-plans`, `verification-before-completion`,
+     `receiving-code-review`). Confirm the superpowers skills appear in your
+     available-skills list. If they don't, **STOP** and tell the user exactly how to
+     fix it: install the superpowers plugin (e.g. `/plugin install superpowers` from
+     its marketplace) and re-run `/cadence:ship <plan>`. A run without superpowers
+     fails midway in confusing ways — never start one. Record
+     `preflight.plugins.superpowers = "ok"`.
+   - **graphifyy (OPTIONAL accelerator).** Check `command -v graphify` or an
+     existing `graphify-out/graph.json`. If present, record
+     `preflight.graphify = "ok"` (and if the graph is missing or stale, refresh it
+     once for the run: `graphify extract . --update` — local tree-sitter parse, no
+     LLM cost); spec agents will then ground their code checks in graph queries.
+     If absent, record `preflight.graphify = "absent"` and proceed normally —
+     graphify is never a blocker, analysis just falls back to reading files.
+2. **`gh` authenticated as the correct user.** Run `gh auth status`. Confirm it
    reports `Logged in to github.com` and capture the account login. If it errors, is
    logged out, or is the *wrong* account for this repo, STOP (`gh auth login` /
    `gh auth switch`) — PR creation and comment replies would otherwise fail silently
    or post as the wrong identity. Record `preflight.ghAuth = "ok"` and `ghLogin`.
-2. **Repo target locked.** `gh repo view --json nameWithOwner`; record `repo`.
-3. **Required MCP servers connected & authenticated.** Determine which MCP servers
+3. **Repo target locked.** `gh repo view --json nameWithOwner`; record `repo`.
+4. **Required MCP servers connected & authenticated.** Determine which MCP servers
    the run depends on (e.g. the Linear/Jira server when the plan/tasks come from or
    report to an issue tracker, plus any other server a task brief names). For each,
    do a cheap read to prove it is reachable and authed (e.g. a list/whoami call). If
    a required server is missing or unauthenticated, STOP and tell the user which
    server to connect/authenticate. Record each as `preflight.mcp[server] = "ok"`.
    (If the run genuinely needs no MCP server, record `preflight.mcp = "none"`.)
-4. **Issue-tracker linkage (if the plan references one).** If the plan/tasks carry
+5. **Issue-tracker linkage (if the plan references one).** If the plan/tasks carry
    tracker keys (Linear/Jira/GitHub Issues/etc.), the tracker's MCP server is
    **required** (not optional) and must have **write** access — confirm you can
    update an issue (read its workflow states; a dry capability check). Map each task
    to its issue key/id/url and record under `issueTracker` + per-task `issue`. Also
    discover and cache the project's **workflow state names** so the sync maps to real
    states, not guesses. If linked but the tracker is read-only/unreachable, STOP.
-5. **Stamp the gate.** Only when 1–4 all pass, set `preflight.passedAt` and proceed.
+6. **Stamp the gate.** Only when 1–5 all pass, set `preflight.passedAt` and proceed.
+
+**Re-verification is scoped, not per-tick:** re-verify the gate (auth/MCP can drop
+between sessions) only at the start of a wakeup that is about to **dispatch new
+spec/implement work**. A pure monitor tick — every active task already `open` —
+skips the MCP pings and auth ceremony; a broken `gh` auth surfaces immediately from
+the change-detection call anyway (then re-run the gate before doing anything else).
 
 Monitoring uses the in-session `ScheduleWakeup` loop only (no cron). It is cheap and
 always runs with your verified auth; it pauses if the session is fully terminated
@@ -369,16 +443,16 @@ and resumes when you re-run `/cadence:ship <plan-path>`.
       commit it before continuing — **never open the plan PR with cycle docs left
       uncommitted on `main`.**
 4. **Open the plan PR → `main` as a draft:** `gh pr create --base main --head
-   cadence/<slug>-integration --draft`. Title: resolve via **PR title convention** (for
-   this first PR, match the repo's house style). Body: the cycle overview + a
-   **static task→PR list** — one line per task, `T-id — <title> — #<prNumber>`,
-   appended **once** when that task's PR opens. Do NOT mirror PR status / CI / merge
-   state into the body and do NOT keep re-editing it: GitHub already renders the live
-   status of referenced PRs, so re-writing the description on every change is wasted
-   churn (and re-triggers noise). Record `planPrNumber` / `planPrUrl`, and seed
-   `prTitlePattern` from the title you used. This PR stays a **draft** until every
-   task has merged into integration (step 3 un-drafts it), and the **human** merges
-   it last.
+   cadence/<slug>-integration --draft`. Title: resolve via the **PR title convention**
+   (`references/task-agent.md`; for this first PR, match the repo's house style).
+   Body: the cycle overview + a **static task→PR list** — one line per task,
+   `T-id — <title> — #<prNumber>`, appended **once** when that task's PR opens. Do
+   NOT mirror PR status / CI / merge state into the body and do NOT keep re-editing
+   it: GitHub already renders the live status of referenced PRs, so re-writing the
+   description on every change is wasted churn (and re-triggers noise). Record
+   `planPrNumber` / `planPrUrl`, and seed `prTitlePattern` from the title you used.
+   This PR stays a **draft** until every task has merged into integration (step 3
+   un-drafts it), and the **human** merges it last.
 5. Compute the first dispatch set = tasks whose **base branch exists**. Initially that
    is every task with **0 or 2+ blockers** (base = integration, which now exists) plus
    any **single-blocker** task whose blocker's branch already exists. Stacked children
@@ -389,52 +463,61 @@ and resumes when you re-run `/cadence:ship <plan-path>`.
 > integration branch and open the plan PR with just the cycle overview — it is the
 > base every task PR ultimately targets.
 
-### 2. Each tick: spawn a per-task agent only for each IDLE active task
+### 2. Each tick: change detection first, then spawn only where there is work
 This is the only "work" the top orchestrator dispatches — it does NOT implement,
 poll, or fix anything itself. An **active** task is one not yet `done`/`failed` whose
 **base branch exists** — i.e. the integration branch (for 0 or 2+ blockers) or its
 single blocker's branch (for a stacked task) has been created and pushed. **This is
 NOT "blockers merged"** — a stacked task is active the moment its blocker's branch
-exists, so work flows without waiting for merges. Of the active tasks, act ONLY on the
-**idle** ones (`agentInFlight = false`) — see Idle-gating:
+exists, so work flows without waiting for merges.
+
+**First: run Change detection** (one batched GraphQL call, diff vs `prSnapshot`).
+Then, of the active tasks, act ONLY on the **idle** ones (`agentInFlight = false`):
 
 | Task status (idle, no agent in flight) | Spawn this tick (model) |
 |---|---|
-| `pending` (base branch exists) | **spec agent** — analysis/plan, decides `complexity` (**opus/high**) → `specified` |
+| `pending` (base branch exists) | **spec agent** — verify-and-extend the brief, decides `complexity`; **fuses into implement for `trivial`/`low`** (**opus/high**) → `specified` or `open` |
 | `specified` | **implement agent** — TDD build → opens PR (**model = `modelPolicy[complexity]`**) → `open` |
-| `open` | **monitor agent** — Monitor pass on the settled PR (**sonnet/low**) |
-| `merged` | **cleanup agent** → removes worktree/branch, status `done` (**sonnet/low**) |
+| `open` **with a snapshot delta** | **monitor agent** — Monitor pass on the settled PR (**sonnet/low**) |
+| `open` with **no delta** | **nothing — quiet, skip** (record the quiet tick) |
+| `merged` | **cleanup agent** (**sonnet/low**) — recovery only: the normal path is the monitor agent doing cleanup in the tick that detects the merge; spawn this only if a cleanup was interrupted |
 | `specifying` / `implementing` / `fixing` | **nothing — agent already in flight, SKIP** |
 
 **Hard requirement: exactly one `Agent` (`general-purpose`) call per *idle active*
-task, all in a single message** so they run concurrently. **Set each agent's `model`
-(and effort) by PHASE from `modelPolicy`** (see Model selection): spec → opus/high,
-implement → by the `complexity` the spec wrote, monitor/cleanup → the cheap `monitor`
-policy. Do not let agents inherit Opus by default. Mark `agentInFlight = true`
-(+ `agentKind`,
-`agentStartedAt`) in `run.json` when you spawn one. Build/fix agents run in the
-**background** (`run_in_background`) so a long build never blocks monitoring of other
-tasks' open PRs; the quick monitor check can be foreground. Each agent resumes from
-`tasks/<id>.json`; pass it the task's context brief, its `runDir`/task-file path, the
-`integrationBranch`, and the current `prTitlePattern`.
+task with work, all in a single message** so they run concurrently. **Set each
+agent's `model` (and effort) by PHASE from `modelPolicy`** (see Model selection).
+Do not let agents inherit Opus by default. Mark `agentInFlight = true` (+
+`agentKind`, `agentStartedAt`) in `run.json` when you spawn one. Build/fix agents
+run in the **background** (`run_in_background`) so a long build never blocks
+monitoring of other tasks' open PRs; the quick monitor check can be foreground.
+**Every agent's brief MUST include:** the path to
+`references/task-agent.md` (resolve it relative to this skill's own directory —
+under a plugin install that is `${CLAUDE_PLUGIN_ROOT}/skills/cadence-executor/references/task-agent.md`
+— and instruct the agent to read it FIRST), the task's context brief from the plan
+(touch set + requirements + acceptance criteria), its `runDir`/task-file path, the
+`integrationBranch`, the current `prTitlePattern`, and whether graphify is
+available (`preflight.graphify`).
 
 Forbidden, because it breaks parallelism, isolation, one-PR-per-task, or idle-gating:
 - Putting two or more tasks into one agent's prompt ("do T2 and T3").
 - Sharing one branch/worktree across tasks — each task gets a distinct **descriptive**
   branch `cadence/<slug>-t<id>-<task-slug>` and worktree, so each produces a distinct PR.
 - Doing a task's build/monitor/fix/state-write inline yourself instead of in its
-  agent. (The top orchestrator never touches a task's PR or `tasks/<id>.json`.)
+  agent. (The top orchestrator never touches a task's PR or `tasks/<id>.json`;
+  its only direct GitHub access is the read-only change-detection call.)
 - **Spawning a monitor/second agent for a task that already has one in flight**, or
   touching that task's PR while its agent runs.
 - Spawning agents one-at-a-time across separate messages (that serializes them).
 
 Do **not** use the Agent tool's ephemeral `isolation: worktree` — it auto-cleans and
 won't survive the days-long monitor. Each agent creates/reuses a **durable** git
-worktree (see Spec step 1).
+worktree (see the playbook's Spec step 1).
 
 When an agent completes, it returns `{id, status, prNumber?, merged?, prState,
-renamedTitle?, note}`. Clear its `agentInFlight` in `run.json` and record the
-pointer/summary; the agent already wrote its own `tasks/<id>.json`.
+renamedTitle?, note}`. Clear its `agentInFlight` in `run.json`, record the
+pointer/summary, and **re-baseline that PR's `prSnapshot`** (so the agent's own
+posts/pushes don't count as news next tick); the agent already wrote its own
+`tasks/<id>.json`.
 
 ### 3. Dispatch, manage the plan PR, and re-arm (the thin top loop)
 After the tick's per-task agents return, the top orchestrator does only bookkeeping.
@@ -451,274 +534,42 @@ After the tick's per-task agents return, the top orchestrator does only bookkeep
   (un-draft, parent tracker → In Review; see "Plan-PR handling"). The plan PR is
   itself driven by a per-task-style agent in the integration worktree when it has
   CI/comments.
-- **Re-arm the loop (mandatory unless fully done):** call **ScheduleWakeup** with
-  `delaySeconds = 180` (quick reaction without being frenetic; the tool clamps to
-  [60, 3600], so sub-60s is impossible). Use `run.json.monitorIntervalSeconds`
-  (default 180). Pass `reason` naming what you're watching, and `prompt` = the same
-  `/cadence:ship <plan-path>` so the next wake re-enters, locates the run, and
-  continues. Record `nextWakeupAt`. This is the **last thing you do this turn**.
+- **Re-arm the loop (mandatory unless fully done) — at the ADAPTIVE interval.**
+  Call **ScheduleWakeup** with `delaySeconds` computed from `run.json.monitorBackoff`
+  (`{baseSeconds: 180, maxSeconds: 1800, quietTicks}`):
+  - **Any agent in flight, any spawn this tick, any snapshot delta, or new work
+    dispatchable** → the run is HOT: reset `quietTicks = 0`, sleep `baseSeconds`.
+  - **Fully quiet tick** (no deltas, no spawns, nothing in flight — everyone parked
+    on humans): increment `quietTicks`, sleep
+    `min(baseSeconds × 2^quietTicks, maxSeconds)` — 180 → 360 → 720 → 1440 → 1800.
+  - Any activity on a later tick snaps the interval back to `baseSeconds`.
+  A reviewer who comments during a quiet stretch waits at most ~30 minutes — noise
+  compared to the human merge gate, and the backoff is what makes multi-day
+  monitoring affordable. `maxSeconds` is overridable per run (never above the
+  tool's 3600 clamp). Pass `reason` naming what you're watching and the current
+  interval, and `prompt` = the same `/cadence:ship <plan-path>` so the next wake
+  re-enters, locates the run, and continues. Record `nextWakeupAt` and the updated
+  `quietTicks`. This is the **last thing you do this turn**.
 - **End condition:** only when the **plan PR is merged into `main`** AND every task
   is `done`/`failed` — remove the integration worktree/branch, write a final summary,
   and **omit ScheduleWakeup**. The run is complete.
 
-## Per-task orchestrator agent (what each per-task agent does when spawned)
-The top orchestrator spawns this agent for an **idle** task (no agent in flight).
-**It is resumable and idempotent:** it begins by reading its `tasks/<id>.json` and
-does only the step its current `status` calls for, then writes its own task file and
-returns. It is the **sole writer of `tasks/<id>.json`** and the only one running `gh`
-for its PR. **On every status change it also runs the Issue-tracker status sync**
-(pending→In Progress, open→In Review, merged→Done, failed→Blocked) if linked.
+## Per-task orchestrator agent (summary — full playbook in references/task-agent.md)
+The top orchestrator spawns this agent for an **idle** task with work. It reads
+`references/task-agent.md` first and follows it exactly. In brief: it resumes from
+its `tasks/<id>.json` and does only the step its `status` calls for — **Spec**
+(worktree + descriptive branch off its base; verify-and-extend the plan brief,
+graphify-first; decide `complexity`; fused straight into implement for
+`trivial`/`low`) → **Implement** (TDD; green gate; complexity-scaled pre-push
+self-review; open its own PR against its `baseBranch`, draft unless safe) →
+**Monitor pass** (ONE GraphQL fetch of all signals; JUDGE BEFORE YOU ACT on every
+comment/review; NO SILENT FIXES — verified `gh` replies with captured URLs; SIGNAL
+RESOLUTION — resolve fixed threads + re-request the reviewer; CI fixes; rebases
+onto its advancing base) → **Cleanup** on merge, then it dies. It is the sole
+writer of its `tasks/<id>.json`, syncs its own tracker issue on every transition,
+and never touches `main` or another task's branch/PR.
 
-**Resume dispatch (first thing the agent does):**
-- `status = pending` (or no file yet) → set `status = specifying`, do the **Spec phase
-  (steps 1–2)** → write the task's `complexity` finding + plan → end at `status =
-  specified`. (Spawned on **opus/high**.)
-- `status = specifying` → spec was interrupted → resume the Spec phase.
-- `status = specified` → set `status = implementing`, do the **Implement phase (steps
-  3–5)** → end at PR-opened, `status = open`. (Spawned at **`modelPolicy[complexity]`**.)
-  **Do NOT run a Monitor pass in this round-trip** — nothing to react to on a PR you
-  just opened; the first monitor is a later idle tick.
-- `status = implementing` → implement was interrupted → reconcile the worktree and
-  continue the Implement phase (still ending at `open`, no monitor).
-- `status = open` → settled, awaiting humans/CI → do **one Monitor pass** (below). If
-  it finds work, the fix is this round-trip's job (`status = fixing` while pushing);
-  finish the push+reply and return — don't loop.
-- `status = merged` → do **Cleanup (step 6)** → status `done` → **the agent dies**.
-- `status = done`/`failed` → nothing; should not have been spawned.
-
-### Spec phase (analysis + plan; runs on opus/high effort, every task)
-1. **Worktree + DESCRIPTIVE branch (off this task's BASE).** `git fetch origin`, then
-   create a durable worktree whose branch is cut from this task's **base** — NOT main:
-   - **0 or 2+ blockers** → base = the integration branch (`origin/cadence/<slug>-integration`).
-   - **exactly 1 blocker** → base = that blocker's branch
-     (`origin/cadence/<slug>-t<blockerId>-<blocker-slug>`) — a **stacked** branch.
-
-   The branch name **must describe what the task does**, not just its id:
-   ```
-   cadence/<slug>-t<id>-<task-slug>
-   ```
-   where `<task-slug>` is a 2–5-word kebab-case summary of the task's actual work
-   (from the title/goal), e.g. `cadence/reply-followups-t1-add-reply-correlation-matcher`.
-   A generic `cadence/<slug>-t<id>` with no description is **not acceptable** — derive the
-   slug from what you're building. Create it:
-   `git worktree add .claude/worktrees/<branch> -b <branch> origin/<base>`.
-   Record `branch`, `worktreePath`, and `baseBranch` (the resolved base) to
-   `tasks/<id>.json` (so the Implement phase, PR creation, and rebases reuse the exact
-   same base). Use the superpowers `using-git-worktrees` skill. NEVER work on `main`,
-   and never branch a task off `main`.
-2. **Spec → plan + complexity finding (autonomous).** Run the superpowers flow:
-   `brainstorming` → `writing-plans`, doing real codebase analysis in context. At every
-   checkpoint/decision, **pick the recommended option** and continue without blocking;
-   append each non-trivial choice to the Decision Log `{decision, chosen, alternatives,
-   why, howToRollback}`. **Determine this task's `complexity`** (`high|medium|low|
-   trivial`, from the real touch set + shared surfaces uncovered) and write it to
-   `tasks/<id>.json` — the orchestrator reads it to pick the Implement model, and the
-   Implement phase reads it to pick the pre-push review depth. **`trivial`** is reserved
-   for a change with **no logic/behavior change** — a typo, lint/formatting fix, or
-   comment/doc-only edit; anything that alters behavior is at least `low`. End at
-   `status = specified`. (Any sub-subagents you spawn for analysis also run opus/high.)
-
-### Implement phase (TDD → PR; runs at modelPolicy[complexity])
-3. **Implement (TDD).** Execute the plan via `executing-plans` /
-   `subagent-driven-development` with `test-driven-development`. Honor all repo
-   `CLAUDE.md` rules and invoke required project skills (migrations, etc.).
-4. **Verify.** Run the repo's lint/format/tests gate (per `CLAUDE.md`). Use
-   `verification-before-completion`. Do not open a PR on a red gate — fix first.
-   Then run a **pre-push self-review scaled to `complexity`**, scoped to *this task's
-   changes only* (the branch diff against its `baseBranch`, which is what `/code-review`
-   reviews by default — never the whole repo):
-   - **`trivial`** → **skip the review**; the green lint/format/tests gate is the whole
-     bar. Push the quickfix. (Don't make a typo/lint/doc change bureaucratic.)
-   - **`low` / `medium`** → run `/code-review low`.
-   - **`high`** → run `/code-review high`.
-
-   Treat findings as suggestions to judge on the merits (same JUDGE-BEFORE-YOU-ACT bar
-   as PR comments): fix the real ones and re-run the gate; a clean/decline-only pass just
-   proceeds. This self-review is *before the PR exists* and is distinct from the
-   monitor/fix loop that answers reviewer comments on an already-open PR.
-5. **PR (one per task, based on this task's `baseBranch`).** Commit on *this task's*
-   branch, `git push -u origin <branch>` (this branch only, never main, never another
-   task's branch), and open **this task's own** PR **targeting its `baseBranch`**:
-   `gh pr create --base <baseBranch> --head <branch> --title "<title>"` — that base is
-   the integration branch (0/2+ blockers) or the single blocker's branch (stacked).
-   Resolve `<title>` via the **PR title convention** — match the cycle's latest PR
-   using the `prTitlePattern` the top orchestrator passed in your brief (re-check the
-   latest PR's current title if you can). Never `--base main` for a task. Do not append
-   your changes onto a sibling task's branch/PR (unless this task qualifies for the
-   trivial-fold exception in the rules, which the top orchestrator decides — a task
-   agent always defaults to its own PR).
-   **Open as `--draft` unless it is already safe to merge** (see the draft rule):
-   any stacked PR, or any PR whose CI hasn't gone green yet, is created `--draft` so a
-   human can't merge it out from under an unmerged base or in-flight work; un-draft
-   (`gh pr ready`) only once settled and its base has merged.
-   **Scale the PR body to `complexity` (see PR content requirements)** — a `trivial`/
-   `low`/simple one-file change gets the short body, not the full template. Only `high` (and rich
-   `medium`) tasks get the full `references/pr-template.md` treatment (Mermaid, full
-   UAT, full decision table). Every PR still says what/why, how to test, and logs any
-   non-trivial autonomous choice — but briefly, in plain language, and referencing
-   sibling work by **PR number + one-line description**, never a bare task id. Write
-   `prNumber/Url`, `branch`, `baseBranch`, `worktreePath`, `isDraft`, `decisionLog`,
-   `status = open` to `tasks/<id>.json`; return the summary. The agent ends this tick
-   here (it does NOT busy-wait for review).
-6. **Cleanup (this agent's last act, once the human merges the task PR into
-   integration).** On merge: `git worktree remove --force .claude/worktrees/<branch>`,
-   delete the local branch, prune. Set `status = done` in `tasks/<id>.json`, sync the
-   tracker (sub-issue → Done). **The agent dies** — the top orchestrator stops
-   re-spawning it. (The integration branch + plan PR live until the human merges the
-   plan PR into `main`.)
-
-## Monitor pass (run BY the per-task agent, on its own settled PR)
-The per-task agent — not the top orchestrator — does this when its task is **idle and
-`status = open`** (PR up, no agent was in flight; see Idle-gating). It is never run
-during a build or while another fix round-trip is in flight. It runs in the task's own
-worktree and writes its own `tasks/<id>.json`. Use `gh` (verified at preflight). For
-this task's PR `<n>`:
-
-> ### NO SILENT FIXES (invariant — this is the bug this section exists to kill)
-> **Every fix MUST be announced on the PR with a real `gh` post, and the post MUST
-> be verified to exist before you consider the item handled.** A pushed commit is
-> NOT a reply. The rule, with no exceptions:
-> 1. Make the change in the worktree → 2. push the branch → 3. **post the reply/
-> comment via `gh`** → 4. **capture the returned reply URL/id** → 5. only then record
-> the item in `answeredComments` (store `{commentId, replyUrl}`).
-> If step 3 returns no URL/id, it did NOT post — retry; do not advance. You may not
-> return from this tick (or set `status` back to `open`) while any fix you pushed this
-> tick lacks a recorded `replyUrl`. Before returning, assert: *every commentId acted
-> on this tick has a `replyUrl`; every CI/conflict fix pushed this tick has a posted PR
-> comment; and every **agreed-and-fixed** review item has its thread **resolved** and
-> the reviewer **re-requested** (see SIGNAL RESOLUTION) so an automated reviewer sees
-> it solved.* If not, do the missing posts/resolves now.
-
-0. **Pull ALL signals first — every tick. "Not merged" is NOT "no change."** The
-   classic bug is checking only `state,mergedAt`, seeing OPEN, and declaring "green,
-   awaiting merge" — which is blind to requested changes, review threads, and CI. So
-   begin EVERY tick with one comprehensive fetch and never short-circuit on merge
-   state alone:
-   ```
-   gh pr view <n> --json state,mergedAt,isDraft,title,reviewDecision,reviewRequests,\
-     latestReviews,statusCheckRollup,mergeable,mergeStateStatus
-   ```
-   plus the review/comment threads in step 2. You may NOT report a PR as "green /
-   ready / awaiting merge" unless this tick you confirmed **all three**:
-   `reviewDecision` is `APPROVED` (or null with no requested reviewers), CI
-   (`statusCheckRollup`) is all green, and `mergeable` is clean. Otherwise report the
-   true state (see below) and act on it.
-1. **Merged?** If `mergedAt` set → do **Cleanup (step 6)**, set `status = done`
-   in `tasks/<id>.json`, and **the agent dies**.
-   - Also read `title`: if the human **renamed** this PR, include the new title as a
-     `renamedTitle` field in your return summary so the **top orchestrator** updates
-     `prTitlePattern` in `run.json` (you don't write `run.json`). It forward-propagates
-     to the next PRs; never rename existing PRs to match.
-2. **Reviews AND comments — read `reviewDecision` AND every comment thread (EVERY
-   tick).** Interpret `reviewDecision` and report it accurately, don't collapse
-   everything to "awaiting merge":
-   - **`CHANGES_REQUESTED`** → actionable: address the feedback now (below).
-   - **`REVIEW_REQUIRED` / requested reviewers pending** → *awaiting human review*,
-     not awaiting merge. Report as "awaiting review from <reviewers>"; don't claim
-     it's merge-ready.
-   - **`APPROVED`** → eligible (still needs CI green + clean mergeable).
-   **Pull ALL comment sources — a plain conversation comment counts as much as a
-   formal review.** Do not check only reviews:
-   - `gh api repos/{owner}/{repo}/issues/<n>/comments` — **general PR conversation
-     comments** (the easy ones to miss; `gh pr view <n> --comments` also shows these),
-   - `gh api repos/{owner}/{repo}/pulls/<n>/reviews` — each review's state + body
-     (a review left as `COMMENTED` carries feedback too, not just `CHANGES_REQUESTED`),
-   - `gh api repos/{owner}/{repo}/pulls/<n>/comments` — inline review-thread comments,
-   - unresolved threads via GraphQL `reviewThreads { isResolved }` when available —
-     an **unresolved thread is an unaddressed item even if you replied before**.
-
-   **Every unanswered human comment is an actionable item** — a question to answer, a
-   change to make, or a point to push back on — regardless of which source it came
-   from or whether a formal review was submitted. (Skip only your own/bot comments.)
-
-   > #### JUDGE BEFORE YOU ACT (reviews are suggestions, not commands)
-   > Never blindly implement a comment/review. A reviewer can be wrong, working from
-   > stale context, out of scope, or trading off something they can't see. For **each
-   > unaddressed item**, FIRST evaluate it on the merits (use the superpowers
-   > `receiving-code-review` skill — technical rigor, not performative agreement):
-   > verify the claim against the actual code, weigh whether it is **correct, valuable,
-   > reasonable, and necessary/in-scope**. Then pick a verdict:
-   > - **Agree** → it's right and worth doing → implement it.
-   > - **Alternative** → the concern is valid but the proposed fix isn't best →
-   >   implement a better fix and explain why.
-   > - **Decline** → wrong, unnecessary, or out of scope → make **NO** code change;
-   >   reply with a respectful, evidence-backed reason and leave the thread open for
-   >   the human (don't resolve a disagreement).
-   > - **Clarify** → ambiguous or you're unsure of intent → ask a focused question in
-   >   the reply; don't guess and don't change code yet.
-   > Record each non-trivial agree/alternative/decline in the task `decisionLog` so the
-   > human sees the reasoning. **Never edit-war:** if a human re-asserts after a
-   > decline, re-judge honestly; if you still disagree, state it once more and leave it
-   > to the human — never merge to end the disagreement.
-
-   For each item, act on the verdict in its own worktree, then **post a real reply and
-   verify it** (per the NO SILENT FIXES invariant):
-   - If **Agree/Alternative** → make the change, push the branch, reply stating what
-     you changed and why (+ the commit SHA).
-   - If **Decline/Clarify** → push nothing; reply with the reasoned explanation or the
-     question.
-   - Inline/review-thread comment → reply **in-thread** so it threads under the
-     reviewer's comment:
-     `gh api repos/{owner}/{repo}/pulls/<n>/comments/<comment_id>/replies -f body='…'`
-     (the response JSON's `html_url`/`id` is your proof — record it).
-   - General PR/issue comment or a summary reply → `gh pr comment <n> --body '…'`
-     (it prints the comment URL — record it).
-
-   > #### SIGNAL RESOLUTION — a reply is NOT a resolution (this is why a bot reviewer
-   > like **Macroscope** "doesn't understand the review was solved")
-   > A reviewer — especially an automated one — tracks its findings by **thread
-   > resolution state and review re-requests**, not by reading your prose reply. After
-   > you **agree-and-fix** an item, you MUST actively signal it's resolved, or the bot
-   > keeps showing it outstanding and `reviewDecision` stays `CHANGES_REQUESTED`:
-   > 1. **Push the fix commit** (so the bot re-scans the new HEAD).
-   > 2. **Resolve the review thread** for each fixed item — GraphQL
-   >    `resolveReviewThread(threadId)` (get `threadId` from the
-   >    `reviewThreads { id isResolved }` query in step 2). Only resolve threads you
-   >    actually fixed; never resolve a **Declined/Clarify** thread (leave those for the
-   >    human).
-   > 3. **Re-request review** from the reviewer/bot once all its change-requests are
-   >    handled, so it re-evaluates and can clear `CHANGES_REQUESTED`:
-   >    `gh api repos/{owner}/{repo}/pulls/<n>/requested_reviewers -X POST -f
-   >    reviewers[]='<reviewer-or-bot-login>'` (or `gh pr edit <n> --add-reviewer
-   >    <login>`). For a bot that re-runs on push, the push + resolved threads is the
-   >    trigger; re-request explicitly when it supports it.
-   > 4. **Verify it took:** re-read `reviewDecision` + `reviewThreads.isResolved` next
-   >    tick; if the bot still shows unresolved findings you believe are fixed, post a
-   >    concise summary comment listing each finding → the commit/line that resolved it,
-   >    and resolve the thread. Don't consider the PR review-clean until the reviewer's
-   >    state reflects it.
-
-   An item is "addressed" once it has been **judged, fixed-or-declined, replied to, AND
-   its resolution signaled** (fixed → thread resolved + re-request; declined → reply
-   only, thread left open). A posted reply alone is NOT "addressed" for an agreed fix.
-   Record `{commentId, replyUrl, threadResolved}` in `answeredComments` ONLY after the
-   reply is confirmed posted — never on push alone, so you never miss or double-post.
-   Set `status = fixing` only while an *agreed* change is in flight, back to `open` once
-   pushed, replied, **and resolution signaled** for every touched item.
-3. **CI red?** Read `statusCheckRollup` from step 0; if any check is failing/pending,
-   `gh pr checks <n>` for logs, fix in the worktree, push, then **`gh pr comment <n>
-   --body '…'`** describing the failure + the fix + commit SHA, and record its URL. A
-   CI fix without a posted comment violates NO SILENT FIXES.
-4. **Merge conflict / behind base?** Rebase the branch onto **this task's `baseBranch`**
-   (from `tasks/<id>.json`) — the integration branch (`origin/cadence/<slug>-integration`)
-   for a 0/2+-blocker task, or the **blocker's branch** for a stacked task; for the
-   **plan PR** it's `origin/main`. Never rebase onto `main` for a task. Resolve,
-   force-push the branch (never main). **Because we flow instead of gating, a base
-   advancing is expected, not exceptional:** when your blocker's branch gets new
-   commits (or merges into integration and its branch is deleted — then re-base onto
-   integration and update `baseBranch`), rebase onto the new base and keep going.
-   **Post a `gh pr comment`** noting the rebase (and call out any behavior change), and
-   record its URL.
-5. Write `lastCheckedAt` and the updated `status` to `tasks/<id>.json`, run the NO
-   SILENT FIXES assertion, then **return** your summary `{id, status, prNumber,
-   merged?, renamedTitle?, prState, note}`. `prState` is the TRUE state observed this
-   tick — one of `changes_requested | awaiting_review | ci_red | conflict |
-   approved_green_awaiting_merge | merged` — so the orchestrator/console reports
-   reality (e.g. "awaiting review", not "awaiting merge"). Only emit
-   `approved_green_awaiting_merge` when reviewDecision=APPROVED **and** CI green **and**
-   mergeable clean. **Never click merge** — leave that to the human.
-
-### Plan-PR handling (top orchestrator; delegates the actual fixing)
+## Plan-PR handling (top orchestrator; delegates the actual fixing)
 - **Add a task's line to the plan PR body once, when its PR first opens**
   (`T-id — <title> — #<prNumber>`). After that, leave the body alone — don't tick,
   restyle, or re-edit it as CI runs or PRs merge. GitHub auto-renders the live status
@@ -737,10 +588,10 @@ this task's PR `<n>`:
   `main`, so committing to it is allowed; the "one PR per task / branch off
   integration" rules apply to task work, not to plan-PR review fixes.)
 - **How:** spawn a per-task-style agent **in the integration worktree** to run the
-  same Monitor pass (JUDGE BEFORE YOU ACT + NO SILENT FIXES apply — judge each comment,
-  fix the valid ones on the integration branch, reply to all), then push
-  `cadence/<slug>-integration` directly. The top orchestrator never fixes inline.
-  **Never merge it.**
+  same Monitor pass from `references/task-agent.md` (JUDGE BEFORE YOU ACT + NO SILENT
+  FIXES apply — judge each comment, fix the valid ones on the integration branch,
+  reply to all), then push `cadence/<slug>-integration` directly. The top orchestrator
+  never fixes inline. **Never merge it.**
   - Exception: if a plan-PR comment demands *substantial new feature work* (not a small
     fix), treat that as a new task — its own descriptive branch + child PR into
     integration — rather than a large direct commit. Default for review feedback is
@@ -748,98 +599,9 @@ this task's PR `<n>`:
 - The run is "complete" only once a human merges the plan PR into `main`; then move
   the parent/epic issue → **Done**, remove the integration worktree/branch, and end
   the loop.
-
-## Issue-tracker status sync (when the cycle is linked to Linear/Jira/etc.)
-If the plan/tasks carry tracker issues, keep those issues' status in lockstep with
-real delivery state, automatically and autonomously (no asking the user), on **every
-status transition**. **Ownership follows the state split:** each **per-task agent**
-syncs its OWN task's issue (it changes that task's status, so it owns the sync), and
-the **top orchestrator** syncs the **parent/epic** issue (plan PR ready → In Review,
-plan PR merged → Done). Because a sync fires whenever the owner writes a status, it
-stays reliable across the re-spawn-each-tick model.
-
-**Map to the project's REAL workflow states** (discovered at preflight), not these
-literal names — pick the closest state each tracker actually has:
-
-| Internal transition | Tracker action on the task's issue |
-|---|---|
-| → `implementing` (dispatched) | Move to **In Progress**; comment "🤖 started · branch `<branch>`" |
-| → `open` (task PR opened) | Move to **In Review / Code Review**; comment the **PR link** |
-| → `fixing` (review/CI feedback) | Keep In Review (use a "Changes Requested" state if one exists) |
-| → `merged` (task PR merged into its base) | Move sub-issue to **Done/Merged**; comment "merged into `<baseBranch>` (cycle plan PR #<n>)" |
-| → `failed` | Move to **Blocked**; comment the blocker + what's needed |
-| plan PR `ready` (all tasks merged) | Move the parent/epic issue to **In Review** |
-| plan PR **merged → `main`** | Move the parent/epic to **Done**; comment "shipped to main" |
-
-Rules:
-- **Idempotent.** Store `issue.lastSyncedStatus` per task; only transition/comment
-  when it differs from the new state, so wakeups don't spam duplicate comments or
-  re-fire transitions.
-- **Map, don't invent.** Use the cached workflow-state list; if no clean match
-  exists, choose the nearest and note the mapping once in the issue. Never create
-  new workflow states.
-- **Two-way, lightly.** If a human moved the issue (e.g. to Blocked) since last
-  sync, respect it — comment rather than fight the human's manual change.
-- **Best-effort, non-blocking.** A tracker write failing must not stall delivery:
-  log it, leave `lastSyncedStatus` unchanged so the next wakeup retries, and keep
-  driving the PR. (The PR, not the ticket, is the source of truth for the code.)
-
-## PR title convention — always match the cycle's latest PR
-Humans often rename a PR title to a house style; every new PR in the cycle must adopt
-that style automatically, so the set stays visually consistent. **Before opening ANY
-PR (task PR or plan PR), resolve the title from the cycle's most recent PR — never
-just from a fixed template:**
-1. From state, find the cycle's **most recently created PR** (max `createdAt` across
-   task PRs + the plan PR) and re-fetch its **current** title:
-   `gh pr view <n> --json title` (current, because you may have renamed it by hand).
-2. If a cycle PR exists, **infer its title structure** — ticket/issue-key placement,
-   leading prefix/scope (`feat:`, `[ABC-1234]`, `area:` …), separators,
-   capitalization, emoji — and build this PR's title in the **same shape**, filled
-   with this task's id/title. Save the exemplar + a short pattern note to state as
-   `prTitlePattern` so the whole cycle stays consistent.
-3. If **no cycle PR exists yet** (first PR of the run), match the repo's house style:
-   `gh pr list --state all --limit 10 --json title` and follow the dominant pattern;
-   if none is clear, default to `<source-key>: <Title>` (or just `<Title>`).
-4. **Stay honest:** never fabricate a ticket key a task doesn't have. If the pattern
-   carries one and this task has none, use the cycle's source key or omit that token.
-
-The top orchestrator derives `prTitlePattern` and passes it in each task agent's brief; the agent
-applies it when running `gh pr create --title`. During monitoring, if you rename a
-cycle PR, capture the new title as the exemplar and update `prTitlePattern` so the
-NEXT PRs follow the new pattern (see Monitor pass).
-
-## PR content requirements — didactic, and scaled to complexity
-Write PR bodies **for a human who has NOT been following the cycle**. Be didactic and
-succinct: explain what the change is and how to test it in plain language, and don't
-bury the reader in internal cross-references. **Right-size the body to the task's
-`complexity`** — a one-file, low-complexity change must NOT get a huge multi-section
-description.
-
-**Two body sizes (pick by `complexity`):**
-- **Simple body — `complexity: trivial`/`low` (and small `medium`):** a few sentences. Just:
-  *What & why* (1–3 sentences), *How to test* (2–4 plain steps or a single line), and
-  a *Decision log* **only if** a real choice was made (one line each). **No Mermaid,
-  no acceptance-criteria checklist, no multi-section template.** A trivial one-file
-  change gets a trivial PR body — matching the change's size is the point.
-- **Full body — `complexity: high` (and rich `medium`):** the full
-  `references/pr-template.md` — What & why, Mermaid diagram(s), full UAT, Decision
-  log, Verification. Use this only when the change genuinely spans multiple files/
-  services or has real design decisions worth a diagram.
-
-**Rules that hold for every PR, both sizes:**
-- **Be didactic about references.** Never point at an opaque internal id (`T2b`,
-  "wave 2", "the matcher task") and expect the reader to decode it. When you must
-  reference sibling work, give the **PR number + a one-line plain description** —
-  e.g. "builds on #123 (adds the reply-correlation matcher)", not "depends on T2b".
-  If a task id must appear, gloss it once: "T2 (PR #123 — the inbound pipeline)".
-- **Decision Log — succinct, not a tech dump.** One line per non-trivial autonomous
-  choice: *what was chosen*, *the alternative*, and *how to roll back*, in plain
-  language. Leave out internal mechanics, file-level detail, and implementation
-  narration — the human wants the decision and the off-ramp, not a design essay. If
-  there were no real choices, omit the log entirely.
-- **UAT teaches testing** — plain steps a non-author can follow (setup, action,
-  expected result); for a simple change, one or two lines is enough.
-- **Verification** — briefly, what tests/lint/gates ran and passed.
+- **Parent/epic tracker sync is yours** (per-task agents sync only their own issue):
+  plan PR ready → parent **In Review**; plan PR merged → parent **Done** ("shipped
+  to main").
 
 ## Guardrails
 - Push to `main`: forbidden, always. Merge a PR: forbidden **by default** — neither
@@ -857,13 +619,15 @@ description.
 - A task PR whose base is `main` is a defect: re-target it to its correct base
   (`gh pr edit <n> --base <baseBranch>` — integration or its blocker's branch) —
   never let task work merge straight to `main`.
-- **Never conclude "no change / awaiting merge" from a merged-only check.** A
-  `gh pr view --json state,mergedAt` that returns OPEN tells you nothing about
-  reviews or CI. Every tick must pull `reviewDecision` + review threads + CI
-  (`statusCheckRollup`) before reporting status — a PR with `CHANGES_REQUESTED`, an
-  unresolved thread, or red CI is actionable, not "ready." The top orchestrator must
-  not do this triage itself; it spawns the per-task agent, which runs the full
-  Monitor pass (step 0 onward).
+- **Never conclude "no change / awaiting merge" from a merged-only check.** The
+  change-detection snapshot exists to decide *whether to spawn*, not to describe PR
+  health — the spawned per-task agent's Monitor pass (which pulls `reviewDecision` +
+  review threads + CI in one GraphQL call) is what reports the true state. A PR with
+  `CHANGES_REQUESTED`, an unresolved thread, or red CI is actionable, not "ready."
+- **The orchestrator's GitHub access is read-only change detection, nothing more.**
+  It never judges comments, never replies, never pushes, never edits a PR (except
+  the plan-PR body's one-time task lines and un-draft). All triage and action belong
+  to per-task agents.
 - If a task's gate cannot go green after honest attempts, set `status = failed`,
   leave the PR as draft with a clear blocker note, and surface it to the human —
   do not force a broken PR through.

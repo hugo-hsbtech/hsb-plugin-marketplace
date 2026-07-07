@@ -41,7 +41,13 @@ must never be committed onto a feature branch).
   "createdAt": "2026-06-23T12:00:00Z",
   "ghLogin": "hugoseabra",
   "repo": "org/repo",
-  "preflight": { "ghAuth": "ok", "mcp": { "Linear": "ok" }, "passedAt": "2026-06-23T12:00:30Z" },
+  "preflight": {
+    "plugins": { "superpowers": "ok" },
+    "graphify": "ok",
+    "ghAuth": "ok",
+    "mcp": { "Linear": "ok" },
+    "passedAt": "2026-06-23T12:00:30Z"
+  },
   "integrationBranch": "cadence/matchmaking-followups-integration",
   "integrationWorktree": ".claude/worktrees/cadence-matchmaking-followups-integration",
   "planPrNumber": 1200,
@@ -56,8 +62,19 @@ must never be committed onto a feature branch).
     "parentIssue": { "key": "ABC-400", "url": "https://linear.app/org/issue/ABC-400" },
     "workflowStates": ["Todo", "In Progress", "In Review", "Done", "Blocked"]
   },
-  "monitorIntervalSeconds": 180,
+  "monitorBackoff": { "baseSeconds": 180, "maxSeconds": 1800, "quietTicks": 2 },
   "nextWakeupAt": "2026-06-23T12:50:00Z",
+  "prSnapshot": {
+    "T1": {
+      "updatedAt": "2026-06-23T12:20:11Z",
+      "headRefOid": "9f1c2ab…",
+      "mergedAt": null,
+      "isDraft": true,
+      "reviewDecision": "REVIEW_REQUIRED",
+      "mergeStateStatus": "CLEAN",
+      "ciState": "SUCCESS"
+    }
+  },
   "mergeAuthorization": null,
   "//mergeAuthorization": "null = default (never merge; human merges). Set ONLY on an explicit user grant, e.g. { scope: 'wave:1' | 'task:T3' | 'cycle', grantedBy: 'user', at: '<iso>', note: '<verbatim instruction>' }. Merge only within scope, only when green + not draft.",
   "modelPolicy": {
@@ -141,7 +158,11 @@ then uses it to pick the Implement agent's model. `agentKind` ∈
 ## Status values (a task's `status`, in `tasks/<id>.json`)
 - `pending` — planned, not started (no file yet = pending). **Idle** → spawn a **spec** agent (opus/high).
 - `specifying` — a spec agent is **in flight** (analysis + plan, deciding complexity). Skip.
-- `specified` — spec done, `complexity` written, **idle** → spawn an **implement** agent at `modelPolicy[complexity]`.
+  A spec agent that finds `complexity` = `trivial`/`low` **fuses straight into the
+  Implement phase in the same invocation** (one spawn, no context re-derivation) and
+  ends at `open`; only `medium`/`high` stop at `specified`.
+- `specified` — spec done, `complexity` written (`medium`/`high` only — lighter tasks
+  fused past this), **idle** → spawn an **implement** agent at `modelPolicy[complexity]`.
 - `implementing` — an implement agent is **in flight** (worktree+branch+code, pre-PR). Skip.
 - `open` — PR created (base = the task's `baseBranch`: integration, or its single
   blocker's branch when stacked), **settled/idle**, awaiting human/CI → this is the
@@ -163,8 +184,24 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
 
 ## Field notes
 - `runDir` / `runHash` — the located run directory and its 6-char token.
-- `preflight` — BLOCKING gate (`ghAuth`, `mcp` per-server or `"none"`, `passedAt`);
-  execution can't start until `passedAt` is set; re-verified before each new wave.
+- `preflight` — BLOCKING gate (`plugins.superpowers` — REQUIRED, the run STOPS if the
+  superpowers plugin is missing; `graphify` — `"ok"`/`"absent"`, optional accelerator,
+  never a blocker; `ghAuth`; `mcp` per-server or `"none"`; `passedAt`). Execution
+  can't start until `passedAt` is set; re-verified only before dispatching NEW
+  spec/implement work — a pure monitor tick skips the pings.
+- `monitorBackoff` — adaptive wakeup interval: `{baseSeconds, maxSeconds, quietTicks}`.
+  A hot tick (delta / spawn / agent in flight) resets `quietTicks = 0` and sleeps
+  `baseSeconds`; each fully quiet tick increments `quietTicks` and sleeps
+  `min(baseSeconds × 2^quietTicks, maxSeconds)`. Defaults 180/1800. (A legacy
+  `monitorIntervalSeconds` field, if present from an older run, is read as
+  `baseSeconds`.)
+- `prSnapshot` — per-task change-detection baseline from the orchestrator's ONE
+  batched read-only GraphQL call (`updatedAt`, `headRefOid`, `mergedAt`, `isDraft`,
+  `reviewDecision`, `mergeStateStatus`, `ciState`). A monitor agent is spawned for an
+  idle `open` task ONLY when a field differs from this baseline (or none exists).
+  Re-baselined right after that task's agent completes, so the agent's own
+  replies/pushes don't read as news next tick. Detection only — the orchestrator
+  never triages or acts on PR content.
 - `integrationBranch` — stacked base; every task branches from it and PRs target it.
 - `integrationWorktree` — the checkout for `integrationBranch`. Its creation is where
   the cycle's plan/design docs are swept off `main` and committed (step 1.3), and where
@@ -193,24 +230,37 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
 ## Resume logic (each wakeup — top orchestrator)
 0. **Locate** the run dir (glob `*-<slug>-cycle/run.json`, match `planPath`) — never
    create a duplicate. Read `run.json` + every `tasks/<id>.json`.
-1. Re-verify the preflight gate (auth/MCP can drop between sessions).
-2. **Spawn one per-task agent per IDLE active task** (its **base branch exists** —
-   integration, or its single blocker's branch when stacked; NOT "blockers merged" —
-   `agentInFlight: false`) in a single message, model by phase: `pending`→**spec** (opus/high),
-   `specified`→**implement** (`modelPolicy[complexity]`), `open`→**monitor** (sonnet),
-   `merged`→**cleanup** (sonnet); **skip any task with `agentInFlight: true` or status
-   `specifying`/`implementing`/`fixing`** (its agent owns it — don't touch its PR). Set
-   `agentInFlight` when spawning; spec/implement/fix run in the background. Each agent
-   resumes from its `tasks/<id>.json`, advances one step, writes its own file, returns
-   a summary. The orchestrator does NO `gh`/fixing.
-3. Clear `agentInFlight` for completed agents; update `run.json` from the summaries
+1. Re-verify the preflight gate **only if this tick will dispatch NEW spec/implement
+   work** (auth/MCP can drop between sessions); a pure monitor tick skips the pings.
+2. **Change detection:** ONE batched read-only GraphQL call over all the cycle's open
+   PRs; diff each against `prSnapshot`; store the fresh values. No delta on an idle
+   `open` task → spawn nothing for it (quiet).
+3. **Spawn one per-task agent per IDLE active task with work** (its **base branch
+   exists** — integration, or its single blocker's branch when stacked; NOT "blockers
+   merged" — `agentInFlight: false`) in a single message, model by phase:
+   `pending`→**spec** (opus/high; fuses into implement for `trivial`/`low`),
+   `specified`→**implement** (`modelPolicy[complexity]`), `open` **with a snapshot
+   delta**→**monitor** (sonnet), `merged`→**cleanup** (sonnet; recovery only — the
+   monitor agent normally cleans up in the tick that detects the merge); **skip any
+   task with `agentInFlight: true` or status `specifying`/`implementing`/`fixing`**
+   (its agent owns it — don't touch its PR). Set `agentInFlight` when spawning;
+   spec/implement/fix run in the background. Every brief includes the path to
+   `references/task-agent.md` (the agent reads it first) and `preflight.graphify`.
+   Each agent resumes from its `tasks/<id>.json`, advances one step, writes its own
+   file, returns a summary. The orchestrator does NO `gh` writes/fixing — its only
+   GitHub access is the read-only change-detection call.
+4. Clear `agentInFlight` for completed agents; update `run.json` from the summaries
    (cached `lastStatus`, `prTitlePattern` on a reported rename, plan-PR task lines
-   added once on first open). Recover any agent past its stale lease.
-4. **Dispatch (no merge gate):** any task whose **base branch now exists** becomes
+   added once on first open); **re-baseline `prSnapshot`** for each PR whose agent
+   acted. Recover any agent past its stale lease.
+5. **Dispatch (no merge gate):** any task whose **base branch now exists** becomes
    active next tick — a stacked child the moment its blocker's branch is pushed, not
    when it merges. Flow; never freeze a task waiting on another's merge.
-5. When all tasks are `done`/`failed` → un-draft the plan PR (`planPrStatus = ready`);
+6. When all tasks are `done`/`failed` → un-draft the plan PR (`planPrStatus = ready`);
    delegate plan-PR CI/comment fixes to an agent in the integration worktree.
-6. If any task is active OR `planPrStatus ≠ merged` → **ScheduleWakeup again**
-   (mandatory — turn-end invariant). Only once the plan PR is `merged` into `main`:
-   remove the integration worktree/branch, write the summary, no wakeup.
+7. If any task is active OR `planPrStatus ≠ merged` → **ScheduleWakeup again**
+   (mandatory — turn-end invariant) at the adaptive interval from `monitorBackoff`:
+   hot tick → reset `quietTicks`, sleep `baseSeconds`; fully quiet tick → increment
+   `quietTicks`, sleep `min(baseSeconds × 2^quietTicks, maxSeconds)`. Only once the
+   plan PR is `merged` into `main`: remove the integration worktree/branch, write the
+   summary, no wakeup.

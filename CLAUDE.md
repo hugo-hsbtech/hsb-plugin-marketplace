@@ -17,8 +17,16 @@ plugins/cadence/
     ship.md                /cadence:ship → loads cadence-executor
   skills/
     cadence-planner/SKILL.md           the planner behavior + references/cycle-plan-template.md
-    cadence-executor/SKILL.md          the executor behavior + references/{execution-state,pr-template}.md
+    cadence-executor/SKILL.md          the TOP ORCHESTRATOR behavior + references/{task-agent,execution-state,pr-template}.md
 ```
+
+The executor's behavior is deliberately split in two: `SKILL.md` is the **top
+orchestrator's** playbook (preflight, dispatch, change detection, re-arm), while
+`references/task-agent.md` is the **per-task agent's** playbook (spec/implement
+phases, Monitor pass, JUDGE BEFORE YOU ACT, NO SILENT FIXES, PR conventions, tracker
+sync) — every spawned agent is told to read it first. This keeps the orchestrator's
+per-wakeup context small. When editing executor behavior, put it in the right file
+and keep the SKILL.md one-paragraph summary of the agent in sync.
 
 Commands are deliberately thin: each one resolves its `$ARGUMENTS` (a task list, a Linear/Jira key, or a plan-doc path) and hands off to the matching skill. The behavior lives in the `SKILL.md` files; the `references/*.md` are the templates and schemas those skills read at runtime.
 
@@ -40,21 +48,24 @@ These constraints define the executor and appear throughout its `SKILL.md`. When
 - **Sweep generated docs off `main`.** The planner writes the cycle-plan/design docs into the **`main` working tree**, where they sit *uncommitted/untracked*. When the executor creates the integration branch (as a **worktree**), it **moves** this cycle's in-scope docs (plan doc + this run's `docs/plans/proposed/` and `docs/superpowers/specs/` files) into that worktree, commits them there, and asserts the `main` checkout is left clean of cycle files. Out-of-scope uncommitted changes (the user's unrelated WIP) are never touched. This is what stops cycle files from stranding on `main`.
 - **Never push/commit to `main`; never merge any PR autonomously.** Merging (both task PRs and the plan PR) is always the human's gate.
 - **One dedicated agent and one PR per task.** Never combine tasks into a shared branch/PR. Branch names are descriptive: `cadence/<slug>-t<id>-<task-slug>`.
-- **Two-level, re-spawn-each-tick execution.** A *thin top orchestrator* (the main loop) only schedules/gates; it spawns one **per-task agent** per *idle active* task each tick. Agents are re-spawned every wakeup rather than kept alive, because monitoring spans days and an agent lives only one turn — continuity is the durable worktree + task file, not the process.
-- **Idle-gating.** Only act on a task with `agentInFlight = false`. A task whose agent is mid-round-trip (`specifying`/`implementing`/`fixing`) is skipped; only a settled `open` PR gets a monitor tick.
-- **Model-by-phase.** Spec/analysis is always **Opus, high effort**; implementation is Opus or Sonnet by the `complexity` the spec phase determined; monitor/fix/cleanup is **Sonnet, low**. Complexity is `high | medium | low | trivial`, decided during the spec phase, not at plan time.
+- **Explicit dependencies at preflight.** The **superpowers plugin is a hard requirement** — the preflight gate STOPS the run with install instructions if its skills aren't available (per-task agents invoke `superpowers:*` throughout). **graphifyy is optional**: detected at preflight (`preflight.graphify = "ok" | "absent"`), used to ground analysis in graph queries when present, silently skipped when absent — it must never become a blocker.
+- **Two-level, re-spawn-each-tick execution.** A *thin top orchestrator* (the main loop) only schedules/gates; it spawns one **per-task agent** per *idle active* task with work each tick. Agents are re-spawned every wakeup rather than kept alive, because monitoring spans days and an agent lives only one turn — continuity is the durable worktree + task file, not the process.
+- **Idle-gating + change detection.** Only act on a task with `agentInFlight = false`. A task whose agent is mid-round-trip (`specifying`/`implementing`/`fixing`) is skipped; a settled `open` PR gets a monitor tick **only when the orchestrator's one batched read-only GraphQL snapshot (`run.json.prSnapshot`) shows a delta** — no delta, no spawn. Change detection is strictly read-only: the orchestrator never triages, replies, or acts on PR content.
+- **Adaptive monitor cadence.** The `ScheduleWakeup` interval is `monitorBackoff`-driven: base 180s while hot (deltas / spawns / agents in flight), doubling per fully-quiet tick to a `maxSeconds` cap (default 1800); any activity resets it. Never a fixed frenetic interval, and never an external scheduler.
+- **Model-by-phase, with a fused fast path.** Spec/analysis is always **Opus, high effort**; implementation is Opus or Sonnet by the `complexity` the spec phase determined; monitor/fix/cleanup is **Sonnet, low**. Complexity is `high | medium | low | trivial`, decided during the spec phase, not at plan time. A spec agent that decides `trivial`/`low` **continues straight into implementation in the same invocation** (one spawn, no context re-derivation); only `medium`/`high` stop at `specified` for a separately-tiered implement agent.
+- **Spec consumes the planner's brief — verify-and-extend, never re-derive.** The plan's per-task context brief (touch set + requirements + acceptance criteria) is the spec phase's starting point; it is verified against current code (graphify-first when available) and extended on drift, with sub-subagents spawned only for genuine unknowns. Re-running full from-scratch analysis per task is the double-payment this rule exists to kill.
 - **Complexity-gated pre-push self-review.** Before opening a task PR (after the green lint/format/tests gate), the implement agent runs a self `/code-review` scoped to *its own branch diff*, scaled to `complexity`: **`trivial` skips it** (a typo/lint/doc change with no behavior change — the gate is enough, don't make it bureaucratic); `low`/`medium` → `/code-review low`; `high` → `/code-review high`. This is a pre-PR self-review, separate from the JUDGE-BEFORE-YOU-ACT monitor loop that answers reviewer comments on an open PR.
 - **JUDGE BEFORE YOU ACT + NO SILENT FIXES.** Reviews are suggestions to evaluate on the merits (agree / alternative / decline / clarify), never commands. Every code change made in response to a comment/CI/conflict must get a real, *verified-posted* `gh` reply (capture the URL) before it counts as handled; agreed-and-fixed items also resolve their review thread and re-request the reviewer.
-- **Turn-end invariant.** If any task is still active or the plan PR isn't merged, the last action of the turn **must** be a `ScheduleWakeup` re-entering `/cadence:ship <plan-path>`. Monitoring uses only in-session `ScheduleWakeup` — never cron or any external/paid scheduler.
+- **Turn-end invariant.** If any task is still active or the plan PR isn't merged, the last action of the turn **must** be a `ScheduleWakeup` (at the current adaptive interval) re-entering `/cadence:ship <plan-path>`. Monitoring uses only in-session `ScheduleWakeup` — never cron or any external/paid scheduler.
 
 ## State model (per-run directory, split by owner)
 
 Executor state lives under `.cadence/cycles/<YYYYMMDD-HHMM>-<6char-hash>-<slug>-cycle/` (add `.cadence/` to the target repo's `.gitignore`; never commit cycle state). Ownership is strict and is the reason state is a directory rather than one file — parallel agents would clobber a shared JSON:
 
-- `run.json` — **orchestrator-owned** (only writer): roster, wave schedule, preflight gate, integration/plan-PR pointers, `prTitlePattern`, `modelPolicy`, `agentInFlight` flags.
+- `run.json` — **orchestrator-owned** (only writer): roster, wave schedule, preflight gate (incl. `plugins.superpowers` / `graphify`), integration/plan-PR pointers, `prTitlePattern`, `modelPolicy`, `agentInFlight` flags, `prSnapshot` change-detection baselines, `monitorBackoff` adaptive-interval state.
 - `tasks/<id>.json` — **task-agent-owned** (each task's agent is the sole writer): that task's status, branch, worktree, PR number, `answeredComments` (with `replyUrl` proof), and `decisionLog`.
 
-Task status flow: `pending → specifying → specified → implementing → open → (fixing ↔ open) → merged → done` (or `failed`). Full schema and field notes: `plugins/cadence/skills/cadence-executor/references/execution-state.md`.
+Task status flow: `pending → specifying → specified → implementing → open → (fixing ↔ open) → merged → done` (or `failed`); the fused fast path for `trivial`/`low` complexity goes `specifying → open` directly (the spec agent implements in the same invocation). Full schema and field notes: `plugins/cadence/skills/cadence-executor/references/execution-state.md`.
 
 ## Versioning policy (bump on every AI enhancement)
 

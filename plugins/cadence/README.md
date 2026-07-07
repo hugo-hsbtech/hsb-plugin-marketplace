@@ -13,7 +13,8 @@ merges on its own.
 | **Install** | `/plugin install cadence@hsb` |
 | **Commands** | `/cadence:plan` (schedule), `/cadence:ship` (execute) |
 | **Skills** | `cadence-planner`, `cadence-executor` |
-| **Requires** | Claude Code · `gh` CLI (authed) · the `superpowers` skill library |
+| **Requires** | Claude Code · `gh` CLI (authed) · **the `superpowers` plugin (hard requirement)** |
+| **Optional** | [`graphifyy`](https://github.com/Graphify-Labs/graphify) — local code knowledge graph that makes analysis cheaper and dependency detection deterministic |
 
 ---
 
@@ -21,6 +22,7 @@ merges on its own.
 
 - [Why Cadence](#why-cadence)
 - [Mental model](#mental-model)
+- [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Core concepts](#core-concepts)
 - [Worked example](#worked-example) — a real dependency graph, its waves, and its PRs
@@ -77,11 +79,27 @@ written.
 
 ---
 
+## Requirements
+
+Cadence does not work alone. The executor's preflight gate checks these before a
+single task is dispatched:
+
+| Dependency | Status | Why | If missing |
+|---|---|---|---|
+| **`superpowers` plugin** | **Required** | Per-task agents run `superpowers:*` skills end to end — worktrees, brainstorming, writing-plans, TDD, verification, receiving-code-review | The run **stops at preflight** with install instructions. Install it first — a run without it fails midway in confusing ways |
+| **`gh` CLI, authenticated** | Required | All PR creation, replies, and thread resolution go through `gh` | The run stops at preflight (`gh auth login`) |
+| **Tracker MCP server** (Linear/Jira/…) | Required *only for linked runs* | Status mirroring needs write access | The run stops at preflight for linked plans; unlinked plans don't need it |
+| **`graphifyy`** | Optional | Local tree-sitter code knowledge graph — spec/planner analysis queries it (`graphify query/path/explain`) instead of exploring files, at zero LLM cost | Nothing breaks — analysis falls back to reading files. Install: `uv tool install graphifyy` |
+
+---
+
 ## Quick start
 
 ```
 /plugin marketplace add hugo-hsbtech/hsb-plugin-marketplace
 /plugin install cadence@hsb
+/plugin install superpowers   # required — from the superpowers marketplace
+uv tool install graphifyy     # optional — cheaper, deterministic code analysis
 ```
 
 Plan a cycle from a task list:
@@ -240,8 +258,12 @@ Turn tasks into a wave schedule. **Plan-only** — it never implements or dispat
 **What it does:**
 
 1. Normalizes tasks to stable IDs (`T1`, `T2`, …) with summaries and declared deps.
-2. Deep codebase analysis — parallel `Explore` subagents compute each task's touch set.
-3. Builds the dependency graph (declared + producer→consumer + write-write conflict).
+2. Deep codebase analysis — parallel `Explore` subagents compute each task's touch
+   set. With `graphifyy` installed, the graph is refreshed once and subagents query
+   it first (`graphify query/path/explain`) — deterministic dependency evidence at
+   zero LLM cost, instead of exploratory file reading.
+3. Builds the dependency graph (declared + producer→consumer + write-write conflict);
+   graphify import/call edges, when present, are the preferred evidence.
 4. Levels tasks into waves by topological sort; computes the critical path.
 5. Emits the cycle plan to `docs/plans/proposed/<YYYYMMDD-HHMM>-<slug>-<task-id>.md`
    (`<task-id>` = the source tracker key, or `cycle` for free-text), recording
@@ -262,15 +284,21 @@ Execute a cycle plan end to end.
 It runs as a **thin top orchestrator** that delegates each task to its own agent. It does
 not implement, monitor, or fix anything itself — it only schedules, gates, and re-arms.
 
-1. **Preflight gate (blocking).** Verifies `gh` auth + account, the target repo, and any
-   required MCP servers (the tracker's server must have write access if tasks are
-   linked). Fails loud and stops if something's missing — nothing dispatches until the
-   gate passes.
+1. **Preflight gate (blocking).** Verifies the **superpowers plugin is installed**
+   (hard stop with install instructions if not), detects optional `graphifyy`,
+   then verifies `gh` auth + account, the target repo, and any required MCP servers
+   (the tracker's server must have write access if tasks are linked). Fails loud and
+   stops if something's missing — nothing dispatches until the gate passes. The gate
+   is re-verified only before dispatching *new* build work; pure monitor ticks skip
+   the ceremony.
 2. **Opens the run.** Creates the integration branch *as a worktree*, sweeps the plan/
    design docs off `main` and commits them there (leaving `main` clean), and opens the
    draft plan PR → `main`.
-3. **Ticks.** Each wake-up, it spawns exactly one agent per *idle active* task and
-   re-arms a `ScheduleWakeup` loop. It ends only when the plan PR is merged and every
+3. **Ticks.** Each wake-up it first runs **change detection** — one batched read-only
+   GraphQL call over all the cycle's PRs, diffed against a stored snapshot — then
+   spawns exactly one agent per *idle active* task **that has something to do** and
+   re-arms an **adaptive** `ScheduleWakeup` loop. A fully quiet tick costs one API
+   call and zero agent spawns. It ends only when the plan PR is merged and every
    task is `done` / `failed`.
 
 ---
@@ -289,16 +317,25 @@ flowchart TD
     G -->|no, in flight| SKIP["skip this task"]
     G -->|yes| SP["spawn one agent<br/>for its next phase"]
   end
-  SP --> A1["spec agent"]
+  SP --> A1["spec agent<br/>(fuses into implement<br/>for trivial/low)"]
   SP --> A2["implement agent"]
-  SP --> A3["monitor agent"]
+  SP --> A3["monitor agent<br/>(only on snapshot delta)"]
   SP --> A4["cleanup agent"]
-  O -.->|"re-arm 180s"| O
+  O -.->|"re-arm: adaptive<br/>180s hot → 30m quiet"| O
 ```
 
 **Idle-gating** is the core rule: act on a task only when it has no agent mid-flight. A
 task whose agent is `specifying` / `implementing` / `fixing` is skipped so you never tick
 a PR mid-round-trip. Only a settled `open` PR gets a monitor tick.
+
+**Change detection** keeps quiet monitoring nearly free: each tick starts with one
+batched read-only GraphQL call over all the cycle's open PRs (head SHA, `updatedAt`,
+review decision, CI rollup, merge state), diffed against a snapshot in `run.json`. A
+PR with no delta spawns **no** agent. And the wake-up interval itself **backs off**
+— 180s while anything is hot, doubling per quiet tick up to 30 minutes while
+everything is parked on humans; any activity snaps it back to 180s. Together these
+cut multi-day monitoring cost by an order of magnitude versus fixed-interval,
+always-spawn polling.
 
 Each per-task agent owns one durable git worktree and one descriptive branch
 (`cadence/<slug>-t<id>-<task-slug>`), and is the **sole writer** of its own task file. It
@@ -312,7 +349,8 @@ advances its task exactly one step per tick and does all its own `gh` work.
 stateDiagram-v2
   [*] --> pending
   pending --> specifying: spec agent (Opus/high)
-  specifying --> specified: complexity decided
+  specifying --> specified: complexity = medium/high
+  specifying --> open: fused fast path — trivial/low<br/>(same agent implements + opens PR)
   specified --> implementing: implement agent
   implementing --> open: PR opened
   open --> fixing: review / CI / conflict
@@ -375,13 +413,22 @@ The model is chosen by **what the agent is doing**, and each task's `complexity`
 
 | Phase | What it does | Model + effort |
 |---|---|---|
-| **spec** | analysis, planning, *decides `complexity`* | **Opus, high** — always |
+| **spec** | verifies + extends the plan's brief, *decides `complexity`*; **implements in the same invocation when trivial/low** | **Opus, high** — always |
 | **implement** — `high` | TDD build of the most complex tasks | Opus, medium |
-| **implement** — `medium` / `low` / `trivial` | TDD build of lighter tasks | Sonnet (low effort for low/trivial) |
+| **implement** — `medium` | TDD build of lighter tasks | Sonnet |
+| **implement** — `low` / `trivial` | normally absorbed by the fused spec agent; spawned separately only to resume an interrupted run | Sonnet, low |
 | **monitor / fix / cleanup** | read PR state, reply, small fixes, teardown | Sonnet, low |
 
 > *Think on Opus, do routine work on Sonnet.* Analysis is never run on a cheap model; the
 > whole cycle is never parked on Opus "to be safe."
+
+Two efficiency rules shape the spec phase. It **consumes the planner's context brief**
+(touch set + requirements, already produced by Opus-tier analysis) — verifying it
+against current code rather than re-deriving it, using graphify queries when the graph
+exists, and escalating to sub-agents only on real drift. And when it lands on
+`trivial`/`low`, it **fuses straight into implementation** — one agent spawn instead of
+two, no context re-derivation, and the small change is built on the stronger model
+anyway.
 
 **Complexity tiers** — `high | medium | low | trivial`. `trivial` means *no logic or
 behavior change* (a typo, a lint/format fix, a comment/doc edit).
@@ -426,7 +473,7 @@ strict:
 
 | File | Sole writer | Holds |
 |---|---|---|
-| `run.json` | the **orchestrator** | roster, wave schedule, preflight gate, integration/plan-PR pointers, `prTitlePattern`, `modelPolicy`, `agentInFlight` flags |
+| `run.json` | the **orchestrator** | roster, wave schedule, preflight gate, integration/plan-PR pointers, `prTitlePattern`, `modelPolicy`, `agentInFlight` flags, `prSnapshot` (change-detection baselines), `monitorBackoff` (adaptive interval) |
 | `tasks/<id>.json` | that **task's agent** | its status, branch, worktree, PR number, `answeredComments` (with `replyUrl` proof), and `decisionLog` |
 
 Full schema and field notes:
@@ -446,7 +493,10 @@ These never bend:
 - **One agent and one PR per task.** Tasks are never combined onto a shared branch/PR.
 - **The plan PR merges last**, into `main`, by a human.
 - **Monitoring uses only the in-session `ScheduleWakeup` loop** — never cron or any
-  external/paid scheduler.
+  external/paid scheduler. The loop is adaptive (backs off while quiet) but never
+  stops while a PR is open.
+- **The orchestrator's own GitHub access is read-only change detection.** All triage,
+  replies, pushes, and judgments happen inside per-task agents.
 
 ---
 
@@ -479,9 +529,20 @@ integration branch, leaving `main` clean.
 **Can I edit the plan before shipping?** Yes — that's the point of the file hand-off.
 Edit the cycle-plan doc, then run `/cadence:ship` on it.
 
-**It stopped at preflight.** A required precondition failed (usually `gh` auth, the wrong
-GitHub account, or an unauthenticated tracker MCP server). Fix what it named and re-run
+**It stopped at preflight.** A required precondition failed — most often the
+**superpowers plugin isn't installed**, `gh` auth is missing/wrong-account, or a
+linked tracker's MCP server is unauthenticated. Fix exactly what it named and re-run
 `/cadence:ship <plan>`.
+
+**Do I need graphifyy?** No — it's optional. With it, planner and spec analysis query
+a local code graph (cheaper, deterministic dependency evidence); without it, they read
+files the classic way. Install with `uv tool install graphifyy` if you want faster,
+cheaper cycles.
+
+**Why did the wake-ups slow down overnight?** By design. The monitor loop backs off
+(180s → up to 30 min) while nothing changes, and quiet ticks spawn no agents — that's
+what keeps a multi-day cycle affordable. Any comment, CI result, push, or merge snaps
+it back to 180s on the next tick.
 
 ---
 
@@ -497,6 +558,9 @@ GitHub account, or an unauthenticated tracker MCP server). Fix what it named and
 | **Stacked PR** | a task PR based on its single blocker's branch |
 | **Idle-gating** | acting on a task only when it has no agent in flight |
 | **Complexity** | `high / medium / low / trivial`; set by the spec phase; drives model + review depth |
+| **Change detection** | one batched read-only GraphQL snapshot per tick; no delta → no agent spawned |
+| **Fused fast path** | a spec agent that finds `trivial`/`low` implements + opens the PR in the same invocation |
+| **Quiet tick** | a tick with no deltas, spawns, or in-flight agents; doubles the wake-up interval (max 30 min) |
 
 ---
 
