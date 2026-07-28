@@ -13,7 +13,7 @@ still describes the code (see [Approval-authorized auto-merge](#approval-authori
 |---|---|
 | **Plugin** | `cadence` (in the `hsb` marketplace) |
 | **Install** | `/plugin install cadence@hsb` |
-| **Commands** | `/cadence:plan` (schedule), `/cadence:ship` (execute) |
+| **Commands** | `/cadence:plan` (schedule), `/cadence:ship` (execute), `/cadence:report` (evidence report) |
 | **Skills** | `cadence-planner`, `cadence-executor` |
 | **Requires** | Claude Code · `gh` CLI (authed) · **the `superpowers` plugin (hard requirement)** |
 | **Optional** | [`graphifyy`](https://github.com/Graphify-Labs/graphify) — local code knowledge graph that makes analysis cheaper and dependency detection deterministic |
@@ -33,6 +33,8 @@ still describes the code (see [Approval-authorized auto-merge](#approval-authori
 - [Execution model](#execution-model)
 - [Task lifecycle](#task-lifecycle)
 - [Draft, readiness, and merging](#draft-readiness-and-merging) — including [approval-authorized auto-merge](#approval-authorized-auto-merge)
+- [Which PR is which task](#which-pr-is-which-task)
+- [The cycle report](#the-cycle-report--evidence-of-how-the-run-actually-went) — evidence of how the run actually went
 - [Open decisions](#open-decisions--questions-you-can-actually-answer) — questions you can actually answer
 - [Anatomy of a Cadence PR](#anatomy-of-a-cadence-pr)
 - [Models & complexity](#models--complexity)
@@ -508,6 +510,92 @@ rather click the button yourself. Either way, **the plan PR into `main` is alway
 
 ---
 
+## Which PR is which task
+
+A cycle opens five to a dozen PRs at once, so the task→PR mapping is stamped onto every
+surface where a PR shows up — you should never have to ask:
+
+- **The first line of every PR body** (both body sizes) is an identity header:
+  ```
+  **T2 · Wire the matcher into the inbound pipeline** — cycle `reply-followups` · plan PR #1200 · ABC-1234 · base: stacked on #1206 (adds the matcher) — merge after it
+  ```
+  Task id *and* what it does in plain words, the cycle, a link to the plan PR, the
+  tracker key, and what it's based on. Land cold on any PR and you know what it is.
+- **A `cadence:<slug>` label on every PR of the run**, so the repo's PR list groups the
+  cycle at a glance. (Best-effort — if the account can't create labels, the run notes it
+  once and carries on.)
+- **The plan PR carries the cycle map** — a table with one row per task, added when its
+  PR opens. GitHub renders each referenced PR's live state beside it, so that one table
+  answers "where is the cycle?" without the description ever being rewritten.
+- **Every message Cadence writes** follows one rule: a task id never appears without its
+  PR number and a plain description, and a PR number never appears without what it does.
+  `T3` alone is meaningless; `#1208 (backfill existing correlations)` isn't.
+
+Turn summaries render as a table — PR, task, what it does, real state — for the same
+reason.
+
+---
+
+## The cycle report — evidence of how the run actually went
+
+When a cycle ends, Cadence writes **`<runDir>/report.md`**: one self-contained file you
+can read, paste into a chat, or hand to whoever maintains the tooling. Ask for it any
+time mid-run with **`/cadence:report`** (it's marked `IN FLIGHT`).
+
+It is built from **append-only event logs written as things happen** — `events/run.jsonl`
+for the orchestrator and `events/<id>.jsonl` per task — because a run spans days and
+sessions and nothing reliable can be reconstructed at the end. What it contains:
+
+| Section | What's in it |
+|---|---|
+| **Outcome** | tasks planned/merged/failed, PRs merged (auto vs. by you), what needed you, what it cost |
+| **Tasks** | per task: PR, complexity, outcome, spec→PR and PR→merged durations, review rounds, decisions |
+| **What needed you** | every human touchpoint with **how long it waited** — decisions, approvals, parked reviewers |
+| **What went wrong** | defects with evidence, **Cadence's own included**: stalls, `waiting-for-merge` conversions, re-drafts after a PR was marked ready, review loops parked at 3 rounds, model escalations, blocked auto-merge guards, decisions that shipped unresolved |
+| **What went well** | fused fast paths, joins that unblocked early starts, one-round reviews, clean auto-merges |
+| **Flow health / Cost** | joins, rebases, conflicts, stalls, re-drafts · agent spawns by kind and model, ticks, quiet ticks |
+| **Timeline** | the merged event log, chronological, with quiet stretches collapsed |
+| **Feedback for the maintainer** | a copy-pasteable block: what worked, what hurt, what was missing — with links |
+
+Two rules keep it useful: **every claim anchors to a PR, comment URL, SHA, or timestamp**
+(an unlogged metric reads `not captured` — never an estimate), and **it doesn't flatter
+the run**. An empty "what went wrong" after a messy cycle is a broken report, not a clean
+one. The file lives under `.cadence/`, which is gitignored — it's yours, not the repo's.
+
+### Closing the loop: the report is how Cadence evolves
+
+The report isn't just a post-mortem for your team — it's the input that improves the
+plugin. After a cycle, bring it to a Claude Code session in the
+[marketplace repo](https://github.com/hugo-hsbtech/hsb-plugin-marketplace) — paste the
+report, hand over the file, or point at the run dir:
+
+```
+/cadence:report                      # in your project — renders <runDir>/report.md
+# then, in the marketplace repo:
+"here's the report from my last cycle"  + paste it (or give the path)
+```
+
+What happens then is **an interactive session, not a silent patch**:
+
+1. **Findings are extracted from your evidence** — each one traced from the symptom to
+   the exact rule in the plugin that produced it, and classed as a behavior defect, a
+   missing capability, a documentation gap, or *not the plugin's fault* (said plainly).
+2. **You're asked what to do** — which findings to take this round, which approach where
+   there's more than one sensible fix, and explicit confirmation before anything touches
+   a safety invariant (merge policy, draft semantics, `main` safety). A report never
+   silently rewrites how Cadence behaves.
+3. **The plan is shown before the edits happen**, so you can redirect it cheaply.
+4. **Changes are applied, versioned, and tagged**, and the round is recorded in
+   `docs/feedback/<date>-<slug>.md` — including **what was deliberately not changed and
+   why**, so your next cycle's report is directly comparable to this one.
+5. **You get a per-finding answer**: fixed (and where), declined (and the reasoning), or
+   deferred (and what evidence would settle it next time).
+
+That's the loop this whole reporting system exists for: run a cycle → collect evidence →
+decide together what to change → ship a new version → run the next cycle against it.
+
+---
+
 ## Open decisions — questions you can actually answer
 
 Cadence is autonomous about *process* and honest about *intent*. Anything it can settle
@@ -684,6 +772,8 @@ strict:
 | File | Sole writer | Holds |
 |---|---|---|
 | `run.json` | the **orchestrator** | roster, wave schedule, preflight gate, integration/plan-PR pointers, `prTitlePattern`, `modelPolicy`, `agentInFlight` flags, `prSnapshot` (change-detection baselines), `monitorBackoff` (adaptive interval), `approvalMergePolicy`, `attention` (what needs you), `stalls`, `unresolvedDecisions` |
+| `events/run.jsonl` · `events/<id>.jsonl` | the orchestrator · each task agent | append-only evidence logs the cycle report is rendered from |
+| `report.md` | rendered on demand | the cycle report — outcome, what needed you, what went wrong, cost, timeline |
 | `tasks/<id>.json` | that **task's agent** | its status, branch (+ `joinBranch` when it has 2+ blockers), worktree, PR number, `isDraft`/`draftReason`, `pendingDecisions`, `approvals` (with the approved SHA), `autoMerge`, `answeredComments` (with `replyUrl` proof), and `decisionLog` |
 
 Full schema and field notes:
@@ -804,6 +894,9 @@ it back to 180s on the next tick.
 | **Open decision** | a question only a human can answer, posted answerably on the PR; blocks readiness and auto-merge until resolved |
 | **Readiness checklist** | the five conditions that decide draft vs. ready — Cadence's call, never a question to the user |
 | **Approval-authorized auto-merge** | a human approval on a task PR authorizes its agent to merge it, while every guard still holds |
+| **Identity header** | the first line of every PR body: task id + what it does + cycle + plan PR + base |
+| **Cycle label** | `cadence:<slug>`, applied to every PR of the run so the PR list groups it |
+| **Cycle report** | `<runDir>/report.md` — the run's evidence file; `/cadence:report` renders it any time |
 | **Idle-gating** | acting on a task only when it has no agent in flight |
 | **Complexity** | `high / medium / low / trivial`; set by the spec phase; drives model + review depth |
 | **Change detection** | one batched read-only GraphQL snapshot per tick; no delta → no agent spawned |

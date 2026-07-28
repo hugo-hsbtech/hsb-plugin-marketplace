@@ -10,8 +10,11 @@ clobber each other):
 
 ```
 .cadence/cycles/<YYYYMMDD-HHMM>-<6char-hash>-<slug>-cycle/
-  run.json            ← ORCHESTRATOR-owned (the top loop is the only writer)
-  tasks/<id>.json     ← TASK-AGENT-owned (that task's agent is the only writer)
+  run.json                  ← ORCHESTRATOR-owned (the top loop is the only writer)
+  tasks/<id>.json           ← TASK-AGENT-owned (that task's agent is the only writer)
+  events/run.jsonl          ← ORCHESTRATOR-owned, append-only evidence log
+  events/<id>.jsonl         ← TASK-AGENT-owned, append-only evidence log (one per task)
+  report.md                 ← the cycle report, rendered from state + the event logs
 ```
 - `<YYYYMMDD-HHMM>` = run start (`date +%Y%m%d-%H%M`); `<6char-hash>` =
   `openssl rand -hex 3`; `<slug>` = canonical slug from the plan metadata header.
@@ -53,6 +56,8 @@ must never be committed onto a feature branch).
   "planPrNumber": 1200,
   "planPrUrl": "https://github.com/org/repo/pull/1200",
   "planPrStatus": "draft",
+  "cycleLabel": "cadence:matchmaking-followups",
+  "//cycleLabel": "The label applied to every PR of this run so the repo's PR list groups the cycle. Created once at run open; \"unavailable\" if the account can't create labels (best-effort, never a blocker).",
   "prTitlePattern": {
     "exemplar": "[ABC-1234] Add reply-correlation matcher",
     "note": "[<source-key>] <Title in sentence case>"
@@ -256,6 +261,18 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
 - `unresolvedDecisions` — decisions that were still open when their PR was merged
   anyway (by a human): the question, the default that therefore shipped, and the PR
   link. Carried into the final run summary as follow-ups so nothing evaporates.
+- `cycleLabel` — the `cadence:<slug>` label applied to every PR of the run (task PRs and
+  the plan PR) so the repo's PR list groups the cycle at a glance. Created once at run
+  open; `"unavailable"` when the account can't create labels — best-effort, never a
+  blocker, never retried in a loop.
+- `events/run.jsonl` + `events/<id>.jsonl` — **append-only evidence logs**, one line per
+  event (`{ts, actor, kind, detail, pr?, url?, sha?, model?}`), written by their single
+  owner as things happen (the orchestrator's own log; one per task agent). They are the
+  only durable record of a multi-day run — nothing is reconstructed at the end.
+- `report.md` — the rendered **cycle report** (outcome, per-task table, what needed the
+  human, what went wrong, flow health, cost, timeline, follow-ups, maintainer feedback).
+  Written at the end condition and on demand (`/cadence:report`). Format, event kinds,
+  and the no-fabrication rules: `cycle-report.md`.
 - `integrationBranch` — stacked base; every task branches from it and PRs target it.
 - `integrationWorktree` — the checkout for `integrationBranch`. Its creation is where
   the cycle's plan/design docs are swept off `main` and committed (step 1.3), and where
@@ -360,9 +377,12 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
 6b. **Report honestly:** the turn summary lists each PR's true state (draft + why,
    awaiting review, awaiting decision, approved, auto-merged, merged) and prints
    `attention`. Never "all ready for review" while any PR is a draft.
+6c. **Append this tick's events** to `events/run.jsonl` (one `tick` line with spawns /
+   deltas / quiet / interval, plus any orchestrator-level event: preflight, stalls,
+   flow conversions, escalations, plan-PR transitions).
 7. If any task is active OR `planPrStatus ≠ merged` → **ScheduleWakeup again**
    (mandatory — turn-end invariant) at the adaptive interval from `monitorBackoff`:
    hot tick → reset `quietTicks`, sleep `baseSeconds`; fully quiet tick → increment
    `quietTicks`, sleep `min(baseSeconds × 2^quietTicks, maxSeconds)`. Only once the
-   plan PR is `merged` into `main`: remove the integration worktree/branch, write the
-   summary, no wakeup.
+   plan PR is `merged` into `main`: remove the integration worktree/branch, **render
+   `report.md`** from the event logs, write the summary with its path, no wakeup.

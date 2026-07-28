@@ -12,6 +12,25 @@ the Simple body for a `low`/small change, the Full body only for genuinely compl
 
 ---
 
+## Identity header — the FIRST line of every PR body, both sizes
+
+Nobody should ever have to ask which PR belongs to which task. One line answers it:
+
+```markdown
+**T2 · Wire the matcher into the inbound pipeline** — cycle `reply-followups` · plan PR #1200 · ABC-1234 · base: stacked on #1206 (adds the matcher) — merge after it
+```
+
+- `**<T-id> · <what this task does, in plain words>**` — the title of the work, not an id.
+- `cycle \`<slug>\`` · `plan PR #<n>` — where it belongs and where the cycle map lives.
+- tracker key, if the task has one. **Never invent one.**
+- `base:` in plain language — `the integration branch`, `stacked on #1206 (adds X) —
+  merge after it`, or `a join of #1206 + #1207, whose conflicts are resolved here`.
+
+Omit tokens that don't apply. Every PR also carries the run's `cadence:<slug>` label so
+the repo's PR list groups the cycle at a glance.
+
+---
+
 ## Open decisions block — goes at the TOP of either body, when any exist
 
 The only section you keep updating after the PR is opened. Omit it entirely when there
@@ -35,12 +54,12 @@ For a one-file / low-risk change. A few sentences is the whole PR. **No Mermaid,
 acceptance-criteria checklist, no multi-section scaffolding.**
 
 ```markdown
-<!-- If there are open decisions, the ⚠️ Open decisions block goes here, first. -->
+**<T-id> · <what this task does>** — cycle `<slug>` · plan PR #<n> · <tracker key> · base: <plain note>
+
+<!-- If there are open decisions, the ⚠️ Open decisions block goes here, right after the header. -->
 ## What & why
 
 <1–3 plain sentences: what this changes and the problem it solves.>
-<If it sits on another PR, say so on its own line: "Stacked on #123 (adds X) — merge
-after it." / "Sits on a join of #123 + #124.">
 
 ## How to test
 
@@ -59,12 +78,14 @@ after it." / "Sits on a join of #123 + #124.">
 For changes that span multiple files/services or carry real design decisions.
 
 ```markdown
-<!-- If there are open decisions, the ⚠️ Open decisions block goes here, first. -->
+**<T-id> · <what this task does>** — cycle `<slug>` · plan PR #<n> · <tracker key> · base: <plain note>
+
+<!-- If there are open decisions, the ⚠️ Open decisions block goes here, right after the header. -->
 ## What & why
 
 <1–3 sentences: the demand in plain language — what problem this solves and for whom.>
 
-**Task:** <T-id> · **Source:** <Linear/Jira key | plan path> · **Cycle:** <slug>, wave <n>
+**Source:** <Linear/Jira key | plan path> · **Cycle:** <slug>, wave <n>
 **Base:** `<baseBranch>` — <plain note: "the integration branch", "stacked on #123
 (adds X) — merge after it", or "a join of #123 + #124, whose conflicts are resolved here">
 **Acceptance criteria**

@@ -7,6 +7,19 @@ context brief from the cycle plan (touch set + requirements + acceptance criteri
 your `runDir` and `tasks/<id>.json` path, the `integrationBranch`, the current
 `prTitlePattern`, and the path to this file.
 
+**Log your evidence as you go.** Append one JSON line to **your own**
+`events/<id>.jsonl` at every milestone — `{ts, actor:"<id>", kind, detail, pr?, url?,
+sha?, model?}` — the moment it happens: `task.spawn`, `task.complexity`, `join.built|
+refreshed|retired`, `pr.opened`, `pr.ready`, `pr.redraft` (with the reason),
+`decision.raised|reminded|answered|shipped_unresolved`, `review.received`,
+`review.round`, `review.parked`, `comment.answered`, `ci.red|green`, `fix.pushed`,
+`rebase`, `conflict`, `guard.blocked` (which guard, why), `automerge`, `merged`,
+`gate.failed`, `escalation`, `task.failed`. It is append-only and yours alone — never
+rewrite it, never touch another task's. The cycle report is rendered from these logs, so
+an unlogged event is simply lost: **log the bad ones too** (re-drafts, failed gates,
+blocked merges, parked reviewers). Schema and kinds:
+`references/cycle-report.md`.
+
 You are **resumable and idempotent**: begin by reading your `tasks/<id>.json` and do
 only the step your current `status` calls for, then write your own task file and
 return. You are the **sole writer of your `tasks/<id>.json`** and the only one
@@ -260,6 +273,17 @@ shipped and how to change it, and report it in your return summary as
    `--base main` for a task. Do not append your changes onto a sibling task's
    branch/PR (unless this task qualifies for the trivial-fold exception, which the
    top orchestrator decides — a task agent always defaults to its own PR).
+   **Stamp your identity on the PR so nobody has to ask which task it is:**
+   - the **first line of the body** is the identity header — in *both* body sizes:
+     `**T2 · Wire the matcher into the inbound pipeline** — cycle \`<slug>\` · plan PR
+     #<planPrNumber> · <tracker key, if any> · base \`<baseBranch>\` (stacked on
+     #<basePr> — merge after it / join of #A + #B / the integration branch)`.
+     Omit tokens that don't exist; never invent a ticket key.
+   - apply the run's cycle label: `gh pr edit <n> --add-label "cadence:<slug>"`
+     (best-effort — if `run.json.cycleLabel` is `"unavailable"`, skip it silently).
+   - return your `{id, title, prNumber}` so the orchestrator can add your row to the
+     plan PR's cycle map.
+
    **Open as `--draft`, then immediately run the readiness checklist and un-draft
    yourself if it passes** (below). **Scale the PR body to `complexity` (see PR
    content requirements, below).**
@@ -647,15 +671,19 @@ multi-section description.
   files/services or has real design decisions worth a diagram.
 
 **Rules that hold for every PR, both sizes:**
-- **Open decisions go FIRST, in both sizes.** If any exist, the body opens with an
+- **The identity header is the first line, in both sizes.** `**<T-id> · <what this task
+  does, in plain words>** — cycle <slug> · plan PR #<n> · <tracker key> · base <...>`.
+  A reader landing cold on this PR must learn, without asking anyone: what it does,
+  which task it is, which cycle it belongs to, and what it's based on.
+- **Open decisions go immediately after the header, in both sizes.** If any exist, an
   `## ⚠️ Open decisions` section — one line each: `**D<n>** (blocking) — <question> →
   [answer here](<commentUrl>)`, struck through once resolved with the answer and the
   SHA. This is the **only** part of the body you keep updating; everything else is
   written once. No open decisions → omit the section entirely.
-- **State the stacking in words, not in the draft flag.** If the PR sits on another
-  task's branch or a join, say so on the first line: `Stacked on #123 (adds the
-  matcher) — merge after it`, or `Sits on a join of #123 + #124`. A reviewer must be
-  able to tell what they're looking at without decoding branch names.
+- **State the stacking in words, not in the draft flag.** The header's `base` token
+  says it in plain language: `Stacked on #123 (adds the matcher) — merge after it`, or
+  `Sits on a join of #123 + #124`. A reviewer must be able to tell what they're looking
+  at without decoding branch names.
 - **Be didactic about references.** Never point at an opaque internal id (`T2b`,
   "wave 2", "the matcher task") and expect the reader to decode it. When you must
   reference sibling work, give the **PR number + a one-line plain description** —

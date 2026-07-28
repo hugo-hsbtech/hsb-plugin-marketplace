@@ -123,6 +123,12 @@ what the task does.)
   (`gh pr ready`) the moment the readiness checklist passes; re-draft (`gh pr ready
   --undo`) if new in-flight work or a new blocking decision appears, and say so in a
   comment. **This call is always yours** — see the readiness rule below.
+- **Every PR says which task it is, everywhere it appears.** Identity header as the
+  first line of every PR body (both sizes), a `cadence:<slug>` label on every PR of the
+  run, a task→PR map table in the plan PR, and — in anything you write — never a bare
+  task id without its PR number and a plain description, never a PR number without what
+  it does. Making the human ask "which PR is T3?" is a defect. See **Task ↔ PR
+  identity**.
 - **Readiness is never a question for the user.** Never ask "should I mark the PRs
   ready for review?" — evaluate the readiness checklist and act. And never report a
   cycle as "ready for review" while its PRs are draft: report each PR's true state
@@ -219,20 +225,29 @@ their summaries). Never end a turn having pushed a fix without a posted, verifie
 **And every turn ends with an honest, actionable status block** — rebuilt from the
 task files, never from memory or optimism:
 
-1. **Per-PR true state.** One line per PR: `#<n> T<id> — <state> — <one-line why>`,
-   where `<state>` is the real one (`draft (CI red)`, `draft (awaiting decision D2)`,
+1. **Per-PR true state, in a table that says which PR is which task.** Never a bare
+   `T2` and never a bare `#1207` — a reader must never have to ask which PR belongs to
+   which task (see **Task ↔ PR identity**). Render:
+
+   | PR | Task | What it does | State |
+   |---|---|---|---|
+   | #1207 | T2 | Wire the matcher into the inbound pipeline | draft — CI red |
+   | #1206 | T1 | Add the reply-correlation matcher | ready — awaiting review from @x |
+
+   `<state>` is the real one (`draft — CI red`, `draft — awaiting decision D2`,
    `ready — awaiting review from @x`, `changes_requested`, `approved — auto-merging`,
-   `merged`). **Never write "all ready for review" while any PR is a draft**, and
-   never call a PR ready/merge-ready without the three-way check (approved + CI green
-   + mergeable clean). If they're drafts, say they're drafts and say what each is
-   waiting on.
+   `approved — awaiting base #1206`, `merged`). **Never write "all ready for review"
+   while any PR is a draft**, and never call a PR ready/merge-ready without the
+   three-way check (approved + CI green + mergeable clean). If they're drafts, say
+   they're drafts and say what each is waiting on.
 2. **"Needs you" list — `run.json.attention`.** Rebuild it each tick by reading every
    `tasks/<id>.json`, and print it whenever it is non-empty. Every entry must be
-   *actionable*: what is being asked, and the link where the user answers it.
-   - each **open decision** → `D<n> · T<id> · #<pr> — <question> → answer at <commentUrl>`
-   - each **parked review loop** (3 rounds spent with a reviewer) → the PR + what's left
-   - each **failed** task → PR link + the blocker
-   - each PR **awaiting human review** for more than ~24h → PR link
+   *actionable*: what is being asked, and the link where the user answers it. Every
+   entry names its PR **and what that PR does** — never a bare task id.
+   - each **open decision** → `D<n> · #<pr> (<what the PR does>) — <question> → answer at <commentUrl>`
+   - each **parked review loop** (3 rounds spent with a reviewer) → `#<pr> (<what it does>)` + what's left
+   - each **failed** task → `#<pr> (<what it does>)` + the blocker
+   - each PR **awaiting human review** for more than ~24h → `#<pr> (<what it does>)`
    - the **plan PR**, once ready → "merge #<n> into `main` to close the cycle"
    If the list is empty, say so in one line ("nothing needs you — N PRs in flight").
    Never end a turn where a decision is waiting on the user without printing it here:
@@ -557,12 +572,17 @@ and resumes when you re-run `/cadence:ship <plan-path>`.
 4. **Open the plan PR → `main` as a draft:** `gh pr create --base main --head
    cadence/<slug>-integration --draft`. Title: resolve via the **PR title convention**
    (`references/task-agent.md`; for this first PR, match the repo's house style).
-   Body: the cycle overview + a **static task→PR list** — one line per task,
-   `T-id — <title> — #<prNumber>`, appended **once** when that task's PR opens. Do
-   NOT mirror PR status / CI / merge state into the body and do NOT keep re-editing
-   it: GitHub already renders the live status of referenced PRs, so re-writing the
-   description on every change is wasted churn (and re-triggers noise). Record
-   `planPrNumber` / `planPrUrl`, and seed `prTitlePattern` from the title you used.
+   Body: the cycle overview + the **cycle map table** (`| Task | What it does | PR |
+   Base |`), one row appended **once** when that task's PR opens — the canonical
+   answer to "which PR is which task" (see **Task ↔ PR identity**). Do NOT mirror PR
+   status / CI / merge state into the body and do NOT keep re-editing it: GitHub
+   already renders the live status of referenced PRs, so re-writing the description on
+   every change is wasted churn (and re-triggers noise). Also create the run's cycle
+   label once — `gh label create "cadence:<slug>" --color BFD4F2 --description
+   "Cadence cycle <slug>"` (ignore "already exists"; on a permissions failure record
+   `cycleLabel: "unavailable"` and carry on) — and apply it to this PR. Record
+   `planPrNumber` / `planPrUrl` / `cycleLabel`, and seed `prTitlePattern` from the
+   title you used.
    This PR stays a **draft** until every task has merged into integration (step 3
    un-drafts it), and the **human** merges it last.
 5. Compute the first dispatch set = tasks whose **base is available**. Initially that
@@ -672,8 +692,9 @@ After the tick's per-task agents return, the top orchestrator does only bookkeep
   re-enters, locates the run, and continues. Record `nextWakeupAt` and the updated
   `quietTicks`. This is the **last thing you do this turn**.
 - **End condition:** only when the **plan PR is merged into `main`** AND every task
-  is `done`/`failed` — remove the integration worktree/branch, write a final summary,
-  and **omit ScheduleWakeup**. The run is complete.
+  is `done`/`failed` — remove the integration worktree/branch, **render
+  `<runDir>/report.md`** from the event logs (see Evidence capture), write the final
+  summary with the report's path, and **omit ScheduleWakeup**. The run is complete.
 
 ## Per-task orchestrator agent (summary — full playbook in references/task-agent.md)
 The top orchestrator spawns this agent for an **idle** task with work. It reads
@@ -696,6 +717,80 @@ intact human approval** per Approval-authorized auto-merge) → **Cleanup** on m
 then it dies. It is the sole writer of its `tasks/<id>.json`, syncs its own tracker
 issue on every transition, and never touches `main`, the plan PR's merge button, or
 another task's branch/PR.
+
+## Evidence capture + the cycle report
+
+A cycle runs for days across sessions, so **what happened must be written down as it
+happens** — at the end there is no memory to reconstruct it from. Both levels append to
+their own append-only log (same single-writer rule as the state files):
+`events/run.jsonl` (yours) and `events/<id>.jsonl` (each task agent's). One JSON line per
+event: `{ts, actor, kind, detail, pr?, url?, sha?, model?}`.
+
+Log the moment it happens — spawns, complexity decisions, PR opened/ready/re-drafted,
+decisions raised/answered, reviews and fix rounds, CI flips, rebases, joins, guard
+blocks, auto-merges, merges, stalls, escalations, failed gates, and one `tick` line per
+wake-up. The full kind list and the rendering rules are in
+**`references/cycle-report.md`**.
+
+From those logs Cadence renders **`<runDir>/report.md`** — a single self-contained file
+the human can read or paste to anyone: outcome, per-task table, **what needed you** (with
+how long each thing waited), **what went wrong** (Cadence's own failures included), flow
+health, cost, timeline, follow-ups, and a copy-pasteable *Feedback for the Cadence
+maintainer* section.
+
+- **Write it at the end condition, before the final summary**, and print its path.
+- **Render it on demand** whenever the user asks how the cycle went (or runs
+  `/cadence:report`), marked `IN FLIGHT`.
+- **Never fabricate a metric** — an event that wasn't logged is `not captured`, never
+  estimated. And never soften the failure sections: a report whose "what went wrong" is
+  empty after a run with re-drafts, stalls, or parked reviewers is a broken report.
+
+## Task ↔ PR identity (the human must NEVER have to ask which PR is which task)
+
+A cycle opens 5–12 PRs at once. If the mapping between a task and its PR lives only in
+the plan doc and the state files, the human ends up asking "which PR was T3 again?" on
+every single turn — a defect, and an easy one to kill: **stamp the identity into every
+surface where a PR appears.** Four places, all mandatory:
+
+1. **The PR body's first line — an identity header, in BOTH body sizes.** Not just the
+   full template; a two-sentence simple PR gets it too:
+   ```
+   **T2 · Wire the matcher into the inbound pipeline** — cycle `reply-followups` ·
+   plan PR #1200 · ABC-1234 · base `cadence/reply-followups-t1-add-reply-matcher`
+   (stacked on #1206 — merge after it)
+   ```
+   Task id **and** a plain-language title, the cycle slug, a link back to the plan PR,
+   the tracker key if any, and what it's based on. Omit tokens that don't exist; never
+   invent a ticket key.
+2. **A cycle label on every PR of the run** — `cadence:<slug>` — so the repo's PR list
+   groups them at a glance. Create it once per run (`gh label create "cadence:<slug>"
+   --color BFD4F2 --description "Cadence cycle <slug>"`, ignore "already exists"), and
+   apply it to every task PR *and* the plan PR at creation (`gh pr edit <n> --add-label
+   "cadence:<slug>"`). **Best-effort**: if label creation is denied by permissions,
+   record it once in `run.json` (`cycleLabel: "unavailable"`) and move on — never let
+   it block or retry-loop.
+3. **The plan PR body is the cycle's canonical map** — a table, appended one row per
+   task as its PR opens (still write-once per row; don't re-edit rows afterwards):
+
+   | Task | What it does | PR | Base |
+   |---|---|---|---|
+   | T1 | Add the reply-correlation matcher | #1206 | integration |
+   | T2 | Wire the matcher into the inbound pipeline | #1207 | #1206 (stacked) |
+
+   GitHub renders each referenced PR's live state next to it, so this one table
+   answers "what's the state of the cycle?" without touching the description again.
+4. **Every message you write** — turn summaries, `attention` entries, dispatch notes,
+   PR comments that mention sibling work. The rule is absolute: **a task id never
+   appears without its PR number and a plain-language description, and a PR number
+   never appears without what it does.** `T3` alone is meaningless to the human;
+   `#1208 (backfill existing correlations)` is self-explanatory. This applies to the
+   per-task agents too — the "be didactic about references" rule in
+   `references/task-agent.md` is the same rule seen from the PR side.
+
+PR **titles** carry the task's real work in plain words (they're derived from the task
+title via the PR title convention), so a title plus the identity header means a reader
+landing cold on any PR knows what it is, which task it came from, and where it sits in
+the cycle.
 
 ## Readiness, draft state, and merging (policy — the task agents execute it)
 
@@ -825,12 +920,12 @@ entry in `tasks/<id>.json.pendingDecisions`; and a review request to the human o
   already answered in this session — record the answer and move on.
 
 ## Plan-PR handling (top orchestrator; delegates the actual fixing)
-- **Add a task's line to the plan PR body once, when its PR first opens**
-  (`T-id — <title> — #<prNumber>`). After that, leave the body alone — don't tick,
-  restyle, or re-edit it as CI runs or PRs merge. GitHub auto-renders the live status
-  of every referenced PR, so churning the description each transition wastes time and
-  adds noise. (Completion is signalled by the one-time un-draft + comment below, not
-  by editing the body.)
+- **Add a task's row to the plan PR's cycle map once, when its PR first opens**
+  (`| T-id | <plain-language what it does> | #<prNumber> | <base> |` — see **Task ↔ PR
+  identity**). After that, leave the body alone — don't tick, restyle, or re-edit rows
+  as CI runs or PRs merge. GitHub auto-renders the live status of every referenced PR,
+  so churning the description each transition wastes time and adds noise. (Completion
+  is signalled by the one-time un-draft + comment below, not by editing the body.)
 - **The plan PR is the one deliberate exception to "draft ⇔ not reviewable."** It
   stays draft until every task has merged into integration, because until then its
   diff is incomplete *by construction* — reviewing it early tells the human nothing.
