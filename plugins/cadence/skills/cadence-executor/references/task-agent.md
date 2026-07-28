@@ -601,14 +601,18 @@ the task's own worktree; writes its own `tasks/<id>.json`. For this task's PR `<
    Every path must be one this task legitimately touches (its brief's touch set plus
    anything the spec phase justified) — **or a file belonging to an unmerged blocker you
    are built on**, which is expected and must be **declared, not hidden**: your branch
-   sits on top of that blocker's work until it lands in integration. Report both numbers
-   in the body — *"Files changed: 34 — 8 this task's, 26 from #35 (not yet merged); they
-   leave this diff when #35 lands."* Anything in neither category means the sync went
-   wrong — almost always 4c resolved the wrong way. **Fix it and re-check; do not push a polluted diff
+   sits on top of that blocker's work until it lands in integration. Declare it **as a
+   condition, not a count** — *"Built on #35; until that merges, its files appear in this
+   diff too."* That sentence stays true until it stops applying, and it says so itself.
+   **Never write a file count into the body** — GitHub renders it live and the next
+   commit makes yours a lie (see DURABLE, NOT VOLATILE). The count belongs in
+   `tasks/<id>.json.filesChanged` and the `scope.checked` event, where current-state
+   lives. Anything in neither category means the sync went wrong — almost always 4c
+   resolved the wrong way. **Fix it and re-check; do not push a polluted diff
    and do not invite review onto one.** Record `filesChanged` + the verdict in
-   `tasks/<id>.json`, and keep `Files changed: N` current in the PR body. If the diff is
-   genuinely large *and* correct, say why in the body — an unexplained 40-file PR for a
-   3-file task is a defect, not a big task.
+   `tasks/<id>.json` — state, not prose. If the diff legitimately reaches beyond the
+   obvious, explain **why** in the body's scope line, qualitatively; never a number. An
+   unexplained sprawling diff for a small task is a defect, not a big task.
 
    **4e. Announce it.** `gh pr comment <n>` describing what moved, what you merged in,
    how any collision was resolved, and the resulting file count — record the URL (NO
@@ -740,6 +744,18 @@ multi-section description.
   files/services or has real design decisions worth a diagram.
 
 **Rules that hold for every PR, both sizes:**
+- **DURABLE, NOT VOLATILE — the body is a description, not a dashboard.** It is written
+  once and read for days, so it must still be true next week. **Never state anything
+  GitHub already renders live and the next commit can falsify:** file or line counts,
+  test pass counts, coverage, timings, "CI green", "all tests passing", mergeability,
+  draft/review state, "N of M tasks merged". Write intent instead — what changed and
+  why, scope *in words*, the commands to verify (not their results), decisions and how
+  to roll them back, risks. **Events with their reasons are history, not status**, and
+  are welcome ("#37 merged into the base and renamed the tables; the conflict was
+  resolved keeping both intents"). Test each sentence: *would one more commit make this
+  wrong?* If yes, it belongs in a **comment** — timestamped, reading as an event — not
+  in the body. The sole exception is the **⚠️ Open decisions** section, which is a live
+  checklist by design.
 - **The identity header is the first line, in both sizes.** `**<T-id> · <what this task
   does, in plain words>** — cycle <slug> · plan PR #<n> · <tracker key> · base <...>`.
   A reader landing cold on this PR must learn, without asking anyone: what it does,

@@ -575,8 +575,11 @@ collisions **in the base's favour** (the parent's work already landed; the branc
 is a stale duplicate), and then **checks the scope**: `git diff origin/<base>...HEAD
 --name-only` must contain only files this task legitimately touches. Foreign paths mean
 the resolution went wrong — it's fixed and re-checked before anyone is asked to review.
-The PR body carries `Files changed: N`, so a mismatch between the PR's stated scope and
-its diff is visible immediately, and a genuinely large diff has to explain itself.
+The PR body states its scope **in words** ("touches `libs/storage/**` and its
+registration; nothing else"), so a mismatch against GitHub's live file list is visible
+immediately — and a diff that legitimately reaches further has to explain itself. The
+count itself stays out of the prose: GitHub renders it live, and a number written into a
+description is wrong one commit later.
 
 ---
 
@@ -798,6 +801,18 @@ flowchart TD
   PR --> DL["Decision log"]
   PR --> V["Verification (gate output)"]
 ```
+
+**Durable, not volatile.** A PR body is written once and read for days, so it never
+restates what GitHub already renders live and the next commit invalidates — no file
+counts, no "42 tests passing", no "CI green", no review or merge state. It carries
+*intent*: what changed and why, scope **in words**, the commands to verify (not their
+results), decisions and how to roll them back, risks. Events with their reasons are
+welcome, because history doesn't rot ("#37 merged into the base and renamed the tables;
+the conflict was resolved keeping both intents"), as are self-expiring conditions ("built
+on #35; until it merges, its files appear in this diff too"). The test applied to every
+sentence: *would one more commit make this wrong?* If yes it becomes a comment —
+timestamped, reading as an event — not part of the description. The one section kept
+deliberately current is **⚠️ Open decisions**.
 
 **Scaled to complexity:** a `trivial` / `low` one-file change gets a few sentences — no
 Mermaid, no full template. Only `high` (and rich `medium`) tasks get the full treatment

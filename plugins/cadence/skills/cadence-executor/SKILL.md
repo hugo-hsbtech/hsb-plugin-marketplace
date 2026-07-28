@@ -1013,10 +1013,13 @@ scope. Two rules, both executed by the task's own agent (mechanics in
   **in the base's favor** (the blocker's version already merged; this branch's copy is a
   stale duplicate), then re-run the check until the diff is this task's work alone.
 
-Record `filesChanged` and the scope-check verdict in the task file, and put
-`Files changed: N` in the PR body so a reviewer can spot pollution at a glance. If the
-diff is genuinely large *and* correct, say why in the body — an unexplained 40-file PR
-for a 3-file task is a defect, not a big task.
+Record `filesChanged` and the scope-check verdict in the **task file** — that's where
+current-state belongs. The **PR body gets a scope statement in words** ("touches
+`libs/storage/**` and its registration; nothing else"), never a count: GitHub renders the
+count live, and a number written into a description is wrong one commit later (see
+**DURABLE, NOT VOLATILE** in `references/pr-template.md`). An unexplained sprawling diff
+for a small task is a defect, not a big task — so if the diff legitimately reaches
+further, the body says *why*.
 
 ### Approval-authorized auto-merge (task PRs only — NEVER the plan PR)
 **An approving review by a human on a task PR is that human's authorization to merge
@@ -1120,6 +1123,11 @@ entry in `tasks/<id>.json.pendingDecisions`; and a review request to the human o
   already answered in this session — record the answer and move on.
 
 ## Plan-PR handling (top orchestrator; delegates the actual fixing)
+- **Never mirror live state into any PR body — this is the general rule, not a plan-PR
+  quirk.** File counts, test counts, CI status, review state, "N of M merged": GitHub
+  renders all of it live, and a description that restates it is stale on the next
+  commit. Bodies carry intent; the tabs carry status. See **DURABLE, NOT VOLATILE** in
+  `references/pr-template.md`.
 - **The plan PR body opens with the cycle plan diagrams** (waves + dependencies, and
   branch topology) — see step 1.4. They are drawn once from the plan and only redrawn if
   the plan itself changes; they show structure, not status.

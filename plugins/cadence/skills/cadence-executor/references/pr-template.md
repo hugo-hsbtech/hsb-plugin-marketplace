@@ -5,6 +5,33 @@ say what changed and how to test it in plain language, and don't bury the reader
 internal cross-references. **Match the body's size to the task's `complexity`** — pick
 the Simple body for a `low`/small change, the Full body only for genuinely complex work.
 
+> ## DURABLE, NOT VOLATILE — the body is a description, not a dashboard
+>
+> A PR body is written once and read for days. **It must still be true next week.** So it
+> carries *intent and judgment*, never live state — and above all never a number GitHub
+> already renders and the next commit invalidates.
+>
+> | Never in the body (GitHub shows it live, and it rots) | Put this instead |
+> |---|---|
+> | "Files changed: 15" · line counts | scope in words: "touches `libs/storage/**` and its registration; nothing else" |
+> | "42 tests passing" · coverage % · timings | what to run: "`nx test storage` (CI runs it)" |
+> | "CI green" · "all checks pass" · "mergeable" | nothing — the checks tab is the truth |
+> | "awaiting review" · "ready to merge" · draft state | nothing — the PR header says it |
+> | "3 of 5 tasks merged" · "currently…" | nothing — referenced PRs render their own state |
+>
+> **Durable, and welcome:** what changed and why · scope in words · how to test (the
+> commands, not their results) · decisions + how to roll them back · open decisions ·
+> identity and base · risks, migrations, follow-ups · and **events with their reasons**
+> ("#37 merged into the base and renamed the tables; the conflict was resolved keeping
+> both intents") — those are history, not status, and history doesn't rot.
+>
+> Test: *would this sentence be wrong after one more commit?* If yes, it doesn't go in
+> the body. If it still matters, it goes in a **comment**, where it reads as a timestamped
+> event rather than a claim about the present.
+>
+> The one section deliberately kept current is **⚠️ Open decisions** — it's a live
+> checklist by design, and it is struck through as each is answered.
+
 > **References must be legible.** Never point at a bare internal id (`T2b`, "wave 2",
 > "the matcher task"). When you reference sibling work, give the **PR number + a
 > one-line description** — "builds on #123 (the reply-correlation matcher)". If a task
@@ -65,8 +92,8 @@ acceptance-criteria checklist, no multi-section scaffolding.**
 
 <2–4 plain steps, or a single line if it's that simple. Setup → action → expected.>
 
-<!-- Files changed: <N>. Keep this current after a base sync — if it doesn't match the
-     task's scope, fix the sync before asking for review. -->
+<!-- State the scope in WORDS if it's worth stating ("touches only x/y/**"). Never a
+     file count — GitHub renders that live and it's wrong after the next commit. -->
 
 <!-- Decision log ONLY if a real autonomous choice was made — otherwise delete this. -->
 ## Decisions
@@ -127,9 +154,12 @@ flowchart LR
 
 ## Verification
 
-- Lint/format: <result> · Tests: <suites + result> · Manual: <what you exercised, if any>
-- **Files changed:** <N> — <one line: the scope this touches. If N looks large for the
-  task, say why here; a diff that doesn't match the stated scope is a bug, not a big task.>
+- **To verify:** `<the lint / test commands a reviewer can run>` — CI runs the same.
+  <Do NOT write pass counts, timings, or "all green": the checks tab is live, this text
+  is not.>
+- **Scope:** <in words — the areas this touches, e.g. "`libs/storage/**` plus its
+  registration and tsconfig references; nothing outside it". No file counts. If the diff
+  legitimately reaches beyond the obvious, say why here.>
 
 ## Notes / risks
 
