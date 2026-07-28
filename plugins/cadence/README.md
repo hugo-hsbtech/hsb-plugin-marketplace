@@ -269,6 +269,19 @@ A join branch is plumbing, not a deliverable: it never gets a PR of its own, and
 deleted once its blockers have all landed in integration (at which point that task's PR
 is re-targeted straight at integration).
 
+```mermaid
+stateDiagram-v2
+  [*] --> Built: all blockers' BRANCHES exist<br/>(merged or not) — cut integration,<br/>merge each blocker in, push
+  Built --> Refreshed: a blocker's branch advanced
+  Refreshed --> Built: task branch rebased onto the refreshed join
+  Built --> Retired: every blocker has merged into integration<br/>→ the join carries nothing unique
+  Retired --> [*]: PR re-targeted to integration,<br/>join branch deleted
+  note right of Built
+    Cross-blocker conflicts are resolved
+    here, once — and explained in the PR body.
+  end note
+```
+
 Each task PR lands in integration as it goes green — merged by you, or by Cadence once
 you've approved it — and then **you** merge the single plan PR into `main` at the end.
 
@@ -352,17 +365,22 @@ worktree + task file, not in a long-running process.
 
 ```mermaid
 flowchart TD
-  subgraph Tick["Each wake-up"]
-    O["Top orchestrator<br/>(schedules & gates only)"]
-    O -->|"idle & active?"| G{"agentInFlight<br/>= false?"}
-    G -->|no, in flight| SKIP["skip this task"]
-    G -->|yes| SP["spawn one agent<br/>for its next phase"]
-  end
-  SP --> A1["spec agent<br/>(fuses into implement<br/>for trivial/low)"]
-  SP --> A2["implement agent"]
-  SP --> A3["monitor agent<br/>(only on snapshot delta)"]
-  SP --> A4["cleanup agent"]
-  O -.->|"re-arm: adaptive<br/>180s hot → 30m quiet"| O
+  W(["wake-up"]) --> CD["change detection<br/>ONE batched read-only GraphQL<br/>over every open PR, diffed vs snapshot"]
+  CD --> FA["flow audit<br/>why is each unfinished task not advancing?"]
+  FA --> Q{"held because another<br/>PR hasn't merged?"}
+  Q -->|"yes — a defect"| CONV["convert it NOW<br/>build/refresh join · rebase · re-target"]
+  Q -->|no| G{"idle (agentInFlight = false)<br/>and something to do?"}
+  CONV --> G
+  G -->|"no — agent owns it,<br/>or parked on a human"| SKIP["skip"]
+  G -->|yes| SP["spawn ONE agent for its next phase"]
+  SP --> A1["spec<br/>(fuses into implement<br/>for trivial/low)"]
+  SP --> A2["implement"]
+  SP --> A3["monitor<br/>(delta · readiness/merge guards ·<br/>base advanced · decision reminder)"]
+  SP --> A4["cleanup"]
+  A1 & A2 & A3 & A4 --> RPT
+  SKIP --> RPT["turn report<br/>per-PR true state + 'needs you' list"]
+  RPT --> RE["re-arm ScheduleWakeup<br/>adaptive: 180s hot → 30 min quiet"]
+  RE -.-> W
 ```
 
 **Idle-gating** is the core rule: act on a task only when it has no agent mid-flight. A
@@ -444,6 +462,24 @@ reviewable, and merging it puts its code into its blocker's branch, which is exa
 where it belongs. The stacking is stated in words (`Stacked on #123 — merge after it`),
 not hidden behind a draft flag.
 
+```mermaid
+stateDiagram-v2
+  [*] --> Draft: PR opened
+  Draft --> Ready: checklist passes
+  Ready --> Draft: regressed
+  Ready --> Approved: a HUMAN approves
+  Draft --> Approved: approved while still draft
+  Approved --> Ready: dismissed, superseded,<br/>or gone STALE
+  Approved --> AwaitingBase: base = a parent's open PR,<br/>or a join branch
+  AwaitingBase --> Approved: base landed / join retired
+  Approved --> Merged: all guards hold →<br/>authorization posted, then merged
+  Merged --> [*]: cleanup
+```
+
+*Regressed* = new in-flight work, a new blocking decision, or CI turning red — the PR
+goes back to draft with a one-line comment saying which. *Stale* = the head changed in
+substance since the approved commit; see the guards below.
+
 ### Approval-authorized auto-merge
 
 Once you approve a task PR, waiting for you to also click **Merge** just parks finished
@@ -490,6 +526,27 @@ shipped with the question never really asked. Now each one becomes an **open dec
 4. It requests your review so it lands in your queue, and comments on the linked issue.
 5. If it's **blocking**, the PR stays a draft and cannot be auto-merged until answered.
 6. It repeats in the **"needs you"** list of every run summary, with the answer link.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as task agent
+  participant PR as its PR
+  participant S as run summary
+  participant You as you
+
+  A->>A: hits a choice it can't settle on the merits
+  A->>A: keeps building with a provisional default
+  A->>PR: posts D1 — options, default in effect,<br/>blast radius, how to answer
+  A->>PR: pins it atop the body · requests your review
+  Note over PR: blocking → PR stays draft,<br/>auto-merge disqualified
+  A->>S: adds D1 to the "needs you" list (with link)
+  S-->>You: every turn, until answered
+  You->>PR: "D1: B"
+  A->>A: implements B if it differs from the default
+  A->>PR: replies with the commit SHA · resolves the thread ·<br/>strikes the line in the body
+  A->>A: re-runs readiness → un-drafts if D1 was the last blocker
+```
 
 When you answer — even tersely — it implements your answer if it differs from the
 default, replies with the commit, resolves the thread, strikes the line from the PR body,
