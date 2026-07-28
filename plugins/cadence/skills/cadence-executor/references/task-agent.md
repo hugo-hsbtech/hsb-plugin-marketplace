@@ -31,7 +31,9 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
   continue the Implement phase (still ending at `open`, no monitor).
 - `status = open` → settled, awaiting humans/CI → do **one Monitor pass** (below).
   If it finds work, the fix is this round-trip's job (`status = fixing` while
-  pushing); finish the push+reply and return — don't loop.
+  pushing); finish the push+reply and return — don't loop. A monitor pass also
+  re-runs the readiness checklist (un-drafting itself when it passes) and may end in
+  `merged`→`done` if an intact human approval authorizes the merge.
 - `status = merged` → do **Cleanup** → status `done` → **you die** (the
   orchestrator stops re-spawning you).
 - `status = done`/`failed` → nothing; you should not have been spawned.
@@ -49,10 +51,38 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
 1. **Worktree + DESCRIPTIVE branch (off this task's BASE).** `git fetch origin`,
    then create a durable worktree whose branch is cut from this task's **base** —
    NOT main:
-   - **0 or 2+ blockers** → base = the integration branch
+   - **0 blockers** → base = the integration branch
      (`origin/cadence/<slug>-integration`).
    - **exactly 1 blocker** → base = that blocker's branch
      (`origin/cadence/<slug>-t<blockerId>-<blocker-slug>`) — a **stacked** branch.
+   - **2+ blockers** → base = **your own join branch**, which you build now (below).
+     You do **not** wait for the blockers to merge.
+
+   **Building the join branch (2+ blockers only).** You need a base that already
+   contains every blocker's work; integration won't have it until they merge, and
+   waiting for that is the freeze this exists to kill. So synthesize the base:
+   ```bash
+   git fetch origin
+   git branch -f cadence/<slug>-t<id>-join origin/cadence/<slug>-integration
+   git worktree add .claude/worktrees/cadence-<slug>-t<id>-join cadence/<slug>-t<id>-join
+   # then, in that worktree, for EACH blocker branch:
+   git merge --no-ff origin/cadence/<slug>-t<blockerId>-<blocker-slug>
+   git push -u origin cadence/<slug>-t<id>-join
+   ```
+   - **Resolve cross-blocker conflicts here**, in the join — that's what the join is
+     for. Log each resolution in `decisionLog` and summarize them in the PR body
+     ("this PR sits on a join of #A and #B; they conflicted in `x.ts`, resolved by …").
+     If two blockers conflict in a way you cannot resolve on the merits, that's an
+     **open decision** (below), not a silent guess.
+   - Record `joinBranch` and `baseBranch = <joinBranch>` in `tasks/<id>.json`, plus
+     `joinedShas` (the blocker head SHAs merged in) so you can tell later whether the
+     join is stale.
+   - A join branch is **infrastructure**: never open a PR for it, never review it,
+     never target `main` with it.
+   - **Refresh it** whenever a blocker's branch advances (Monitor step 4), and
+     **retire it** once every blocker has merged into integration: re-target your PR
+     to the integration branch (`gh pr edit <n> --base <integrationBranch>`), update
+     `baseBranch`, drop `joinBranch`, and delete the join branch locally + remotely.
 
    The branch name **must describe what the task does**, not just its id:
    ```
@@ -92,6 +122,10 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
      the recommended option** and continue without blocking; append each
      non-trivial choice to the Decision Log
      `{decision, chosen, alternatives, why, howToRollback}`.
+     **Exception:** a choice you cannot settle on the merits — because it needs
+     information only a human has — is not a decision-log line. Raise it as an
+     **open decision** (next section), keep your provisional default, and keep
+     building. Do not stop, and do not ship it silently.
    - **Determine this task's `complexity`** (`high|medium|low|trivial`, from the
      verified touch set + shared surfaces) and write it to `tasks/<id>.json` — the
      orchestrator reads it to pick the Implement model, and the Implement phase
@@ -101,6 +135,88 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
 
    Then: `high`/`medium` → write the plan, set `status = specified`, return.
    `trivial`/`low` → set `status = implementing` and continue below (fused path).
+
+## Open decisions (a question for the human must be ANSWERABLE, or it isn't asked)
+
+> The bug this kills: a task hits a question it can't really answer, quietly picks a
+> default, opens the PR, and the PR gets merged with the question never asked — or
+> asked in a form nobody could act on. **If you need a human, leave them something
+> they can answer in one reply, in the place they're already looking (the PR).**
+
+**When is it an open decision?** Only when the answer needs information you do not
+have and cannot derive from the code, the plan, or repo convention:
+- product / UX intent (which behavior is actually wanted),
+- a business or policy tradeoff (pricing, limits, retention, wording that carries
+  commitment),
+- ambiguous or contradictory acceptance criteria in the brief,
+- an irreversible or data-affecting choice (destructive migration, backfill strategy,
+  a public API/contract shape you'd have to break later),
+- a security / compliance / privacy tradeoff,
+- two blockers whose conflicting work can't be reconciled on technical merit.
+
+Everything else stays **autonomous**: decide it, log it, move on. Raising too many
+open decisions is its own failure — it turns an autonomous run into a questionnaire.
+Aim for zero or one per task; three is a sign the brief was underspecified (say so).
+
+**Blocking or not.** `blocking: true` when shipping the wrong answer would be wrong
+behavior, hard to reverse after merge, or makes an acceptance criterion unverifiable.
+Otherwise `blocking: false` — a reversible preference: default it, ask anyway, and
+let it ride. A blocking decision **keeps the PR draft and disqualifies auto-merge**.
+
+**Raising one (all five steps, or it doesn't count):**
+1. **Keep building** with your provisional default so the branch stays complete and
+   testable. Never park a task on an unanswered question.
+2. **Post the question on the PR** as a comment, and capture its URL (same proof
+   discipline as NO SILENT FIXES — no URL means it didn't post; retry):
+   ```markdown
+   ## 🔶 Open decision D2 — <one-line question>   <!-- blocking: yes -->
+
+   **Why I can't decide this:** <what information is missing and why the code
+   doesn't answer it — 1–2 sentences.>
+
+   **Options**
+   - **A — <label>** (currently implemented): <what it does> · <tradeoff>
+   - **B — <label>**: <what it does> · <tradeoff>
+   - **C — <label>**: <what it does> · <tradeoff>
+
+   **In effect right now:** A. **Impact if we're wrong:** <blast radius, and how hard
+   it is to change after merge.>
+
+   **To answer:** reply on this comment with `D2: B` (or `D2: A`, `D2: C`, or just
+   describe what you want). Until then this PR stays in draft and won't be merged.
+   ```
+   Ask for what you need, not for permission: never "shall I proceed?", never "do you
+   want me to mark this ready?" — those are your calls, not theirs.
+3. **Pin it in the PR body.** Keep an `## ⚠️ Open decisions` section at the very top
+   of the body (this is the one part of the body you *do* keep current), one line per
+   decision: `**D2** (blocking) — <question> → [answer here](<commentUrl>)`. Strike it
+   through when resolved, noting the answer and the SHA that implemented it.
+4. **Record it** in `tasks/<id>.json.pendingDecisions`:
+   `{id: "D2", question, options, provisionalChoice, impact, blocking, commentUrl,
+   status: "open", askedAt}`.
+5. **Put it in a human's queue** — request review from the PR's human owner (or the
+   cycle's requester) so it shows up where they triage: `gh pr edit <n> --add-reviewer
+   <login>`. If the task is tracker-linked, comment the same question on the issue.
+
+**Harvesting the answer** (every Monitor pass — see step 2b): scan new comments for a
+reply to that thread or any comment naming the decision id. Any human answer wins over
+your default, even a terse one (`D2: B`, "go with B", "keep A"). Then: implement it if
+it differs from the default, reply with what you changed and the commit SHA, resolve
+the thread, set `status: "resolved"` + `answeredBy`/`resolvedInSha`, update the PR body
+line, and **re-run the readiness checklist** — clearing the last blocking decision is
+usually what makes the PR ready.
+
+**Reminders, not nagging.** If a blocking decision is still open after the run has gone
+quiet twice (the orchestrator's backoff at its cap), post **one** short reminder
+comment linking the original question, and set `remindedAt`. Never more than one
+reminder per decision — after that it lives in the orchestrator's `attention` list,
+which is printed every turn.
+
+**Never let one evaporate.** You may not set `status = done`, un-draft, or auto-merge
+with a blocking decision open. If a human merges the PR anyway with any decision
+unresolved, post a follow-up comment on the merged PR stating which default therefore
+shipped and how to change it, and report it in your return summary as
+`unresolvedDecisions` so the orchestrator carries it into the final summary.
 
 ## Implement phase (TDD → PR; spawned at modelPolicy[complexity], or fused)
 
@@ -138,20 +254,49 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
    never another task's branch), and open **this task's own** PR **targeting its
    `baseBranch`**:
    `gh pr create --base <baseBranch> --head <branch> --title "<title>"` — that base
-   is the integration branch (0/2+ blockers) or the single blocker's branch
-   (stacked). Resolve `<title>` via the **PR title convention** (below). Never
+   is the integration branch (no blockers), the single blocker's branch (stacked), or
+   your join branch (2+ blockers). Resolve `<title>` via the **PR title convention**
+   (below). Never
    `--base main` for a task. Do not append your changes onto a sibling task's
    branch/PR (unless this task qualifies for the trivial-fold exception, which the
    top orchestrator decides — a task agent always defaults to its own PR).
-   **Open as `--draft` unless it is already safe to merge**: any stacked PR, or any
-   PR whose CI hasn't gone green yet, is created `--draft` so a human can't merge
-   it out from under an unmerged base or in-flight work; un-draft (`gh pr ready`)
-   only once settled and its base has merged.
-   **Scale the PR body to `complexity` (see PR content requirements, below).**
-   Write `prNumber/Url`, `branch`, `baseBranch`, `worktreePath`, `isDraft`,
-   `decisionLog`, `status = open` to `tasks/<id>.json`; return the summary. You end
-   this tick here (do NOT busy-wait for review).
-6. **Cleanup (your last act, once the human merges the task PR into its base).**
+   **Open as `--draft`, then immediately run the readiness checklist and un-draft
+   yourself if it passes** (below). **Scale the PR body to `complexity` (see PR
+   content requirements, below).**
+   Write `prNumber/Url`, `branch`, `baseBranch`, `joinBranch?`, `worktreePath`,
+   `isDraft`, `readyAt?`, `decisionLog`, `pendingDecisions`, `status = open` to
+   `tasks/<id>.json`; return the summary. You end this tick here (do NOT busy-wait
+   for review).
+
+   > #### READINESS IS YOURS TO DECIDE — never ask, never leave it hanging
+   > **Draft means "a human would waste their time reading this," nothing else.**
+   > Being stacked on an unmerged base is *not* a reason to stay draft: a stacked PR
+   > merges into its blocker's *branch*, which is exactly where its code belongs, and
+   > leaving it hidden is what strands a whole cycle in draft with nothing reviewable.
+   > Say `Stacked on #N — merge after it` in the body instead.
+   >
+   > **Checklist — all five true → `gh pr ready <n>`:**
+   > 1. no work of yours still in flight (you're about to return),
+   > 2. local gate green (lint/format/tests) **and** no failing CI check,
+   > 3. the pre-push self-review ran for this `complexity` (`trivial` → not required),
+   > 4. **no unanswered blocking open decision**,
+   > 5. the PR body is written to the standard (what & why, how to test, decisions).
+   >
+   > Then post one short comment ("ready for review — <one-line why>") and set
+   > `isDraft = false`, `readyAt`. Any item false → stay draft and record which one in
+   > `draftReason` so the orchestrator can report it honestly.
+   >
+   > **Never ask the user whether to mark a PR ready** — not here, not in a summary,
+   > not on the next tick. It is a mechanical checklist, and it is yours. Equally,
+   > never *report* a PR as ready while it is still a draft.
+   >
+   > Re-run this checklist on **every** monitor tick: a PR that went draft for red CI
+   > un-drafts itself when CI goes green; a PR whose last blocking decision was just
+   > answered un-drafts itself the same tick. And if a ready PR regresses (new
+   > in-flight work, a new blocking decision, CI turns red), `gh pr ready --undo` and
+   > post a one-line comment saying why.
+6. **Cleanup (your last act, once the task PR is merged into its base — by the human,
+   or by you under an intact human approval).**
    On merge: `git worktree remove --force .claude/worktrees/<branch>`, delete the
    local branch, prune. Set `status = done` in `tasks/<id>.json`, sync the tracker
    (sub-issue → Done). **You die** — the orchestrator stops re-spawning you. (The
@@ -192,8 +337,9 @@ the task's own worktree; writes its own `tasks/<id>.json`. For this task's PR `<
        mergeable mergeStateStatus
        reviewRequests(first:20){nodes{requestedReviewer{
          ... on User{login} ... on Team{name}}}}
-       reviews(last:30){nodes{author{login} state body submittedAt}}
-       comments(last:100){nodes{databaseId author{login} body url createdAt}}
+       reviews(last:30){nodes{author{login __typename} authorAssociation
+         state body submittedAt commit{oid}}}
+       comments(last:100){nodes{databaseId author{login __typename} body url createdAt}}
        reviewThreads(first:100){nodes{id isResolved
          comments(first:50){nodes{databaseId author{login} body url}}}}
        commits(last:1){nodes{commit{statusCheckRollup{state
@@ -204,16 +350,22 @@ the task's own worktree; writes its own `tasks/<id>.json`. For this task's PR `<
    }'
    ```
    That single response carries merge state, draft state, `reviewDecision`, every
-   review (a `COMMENTED` review carries feedback too), every general conversation
-   comment, every inline thread with `isResolved` (an **unresolved thread is an
-   unaddressed item even if you replied before**), and the full CI rollup. Fall
+   review (a `COMMENTED` review carries feedback too — and `author.__typename` +
+   `authorAssociation` + `commit.oid` tell you whether an `APPROVED` review came from
+   a **human** and **which SHA they approved**, which is what the auto-merge guards
+   turn on), every general conversation comment, every inline thread with `isResolved`
+   (an **unresolved thread is an unaddressed item even if you replied before**), and
+   the full CI rollup. Fall
    back to the individual `gh pr view` / `gh api` REST calls only if the GraphQL
    call fails. You may NOT report a PR as "green / ready / awaiting merge" unless
    this tick you confirmed **all three**: `reviewDecision` is `APPROVED` (or null
    with no requested reviewers), CI rollup all green, and `mergeable` clean.
    Otherwise report the true state and act on it.
-1. **Merged?** If `mergedAt` set → do **Cleanup** (step 6 above), set
-   `status = done` in `tasks/<id>.json`, and **you die**.
+1. **Merged?** If `mergedAt` set → do **Cleanup** (the Implement phase's last step),
+   set `status = done` in `tasks/<id>.json`, and **you die**. If any of your
+   `pendingDecisions[]` is still unresolved, first post a follow-up comment naming the
+   default that therefore shipped and how to change it, and return it in
+   `unresolvedDecisions` so it survives into the run summary.
    - Also read `title`: if the human **renamed** this PR, include the new title as
      a `renamedTitle` field in your return summary so the **top orchestrator**
      updates `prTitlePattern` in `run.json` (you don't write `run.json`). It
@@ -323,30 +475,132 @@ the task's own worktree; writes its own `tasks/<id>.json`. For this task's PR `<
    miss or double-post. Set `status = fixing` only while an *agreed* change is in
    flight, back to `open` once pushed, replied, **and resolution signaled** for
    every touched item.
+2b. **Harvest answers to your open decisions, and keep them visible.** For each
+   `pendingDecisions[]` entry with `status: "open"`, look in this tick's payload for a
+   human answer — a reply in that thread, or any comment naming the id (`D2: B`, "go
+   with B on D2", "keep the default"). A human answer always wins over your default.
+   - **Answered** → if it differs from what's implemented, make the change in your
+     worktree and push; then reply with what you changed + the commit SHA, resolve the
+     thread, set `status: "resolved"`, `answeredBy`, `answeredAt`, `resolvedInSha`,
+     and strike the line through in the PR body's **⚠️ Open decisions** section. If
+     the answer confirms the default, still reply, resolve, and mark it resolved — an
+     unanswered-looking decision is as bad as an unasked one.
+   - **Ambiguous answer** → reply once asking the narrow follow-up; keep it open.
+   - **Still open** → leave it; post the single reminder if the run has been quiet
+     twice and `remindedAt` isn't set. Never re-post the question.
+   - After any resolution, **re-run the readiness checklist** (step 5) — clearing the
+     last blocking decision is usually what makes the PR ready.
+   - A new open decision can also arise *here* (a reviewer raises a product question
+     you can't settle): raise it with the full five-step protocol, which means the PR
+     goes back to draft if it's blocking.
+2c. **Update the approval ledger** (this is what makes auto-merge safe). From the
+   `reviews` in this tick's payload, maintain `approvals[]` in `tasks/<id>.json`:
+   `{login, isHuman: author.__typename == "User", association, state, sha:
+   commit.oid, at: submittedAt}`. Keep the **first** SHA at which each reviewer
+   approved (`approvedSha`) and clear a reviewer's approval when they later submit
+   `CHANGES_REQUESTED` or their review is dismissed. This ledger is append-only
+   bookkeeping — it never decides anything by itself; step 6 checks the guards.
 3. **CI red?** Read the `statusCheckRollup` from step 0; if any check is
    failing/pending, `gh pr checks <n>` for logs, fix in the worktree, push, then
    **`gh pr comment <n> --body '…'`** describing the failure + the fix + commit
    SHA, and record its URL. A CI fix without a posted comment violates NO SILENT
    FIXES.
-4. **Merge conflict / behind base?** Rebase the branch onto **this task's
-   `baseBranch`** (from `tasks/<id>.json`) — the integration branch
-   (`origin/cadence/<slug>-integration`) for a 0/2+-blocker task, or the
-   **blocker's branch** for a stacked task; for the **plan PR** it's `origin/main`.
-   Never rebase onto `main` for a task. Resolve, force-push the branch (never
-   main). **Because the cycle flows instead of gating, a base advancing is
-   expected, not exceptional:** when your blocker's branch gets new commits (or
-   merges into integration and its branch is deleted — then re-base onto
-   integration and update `baseBranch`), rebase onto the new base and keep going.
-   **Post a `gh pr comment`** noting the rebase (and call out any behavior
-   change), and record its URL.
-5. Write `lastCheckedAt` and the updated `status` to `tasks/<id>.json`, run the NO
+4. **Merge conflict / behind base? Base advanced?** Keep your PR sitting on a current
+   base — this is routine, not exceptional, because the cycle flows instead of gating.
+   - **Stacked (1 blocker)** → rebase onto `origin/<blocker branch>`. If that blocker
+     merged and its branch was deleted, re-base onto the integration branch and update
+     `baseBranch` (`gh pr edit <n> --base <integrationBranch>`).
+   - **Join base (2+ blockers)** → **refresh the join** whenever a blocker head moved
+     (compare against `joinedShas`): in the join worktree, merge the current
+     integration plus each blocker's new head, push the join, then rebase your task
+     branch onto it. Once **every** blocker has merged into integration, **retire the
+     join**: re-target the PR to the integration branch, set `baseBranch` to it, drop
+     `joinBranch`, delete the join branch locally and remotely.
+   - **No blockers** → rebase onto the integration branch. For the **plan PR** it's
+     `origin/main`.
+
+   Never rebase a task onto `main`. Resolve conflicts, force-push **your** branch
+   (never `main`, never another task's). **Post a `gh pr comment`** noting the rebase
+   or join refresh (and call out any behavior change), and record its URL.
+
+   > **Never report "waiting for #N to merge" as your state.** If your base advancing
+   > is what you need, do the rebase/refresh now — that's this step. The only thing
+   > you legitimately wait on is a human (review, decision) or CI.
+5. **Re-run the readiness checklist** (Implement phase, step 5's block). Un-draft with
+   `gh pr ready <n>` the moment all five items pass — most often this is the tick
+   where CI went green, the last blocking decision got answered, or the fix round
+   finished. If a ready PR regressed, `gh pr ready --undo` + one-line comment. Update
+   `isDraft` / `readyAt` / `draftReason`. **This is never a question you ask.**
+6. **Approval-authorized auto-merge (task PRs only; never the plan PR).** An approving
+   review from a **human** on your PR is that human's authorization to merge it — so
+   merge it, instead of parking finished work behind a button. Merge **only if all of
+   these hold in THIS tick's payload** (skip entirely when
+   `run.json.approvalMergePolicy = "off"`, or when your base is `main`):
+   1. `approvals[]` contains a **human** approval (`__typename == "User"`) — a bot
+      approval alone never authorizes a merge;
+   2. `reviewDecision == APPROVED`, with no later `CHANGES_REQUESTED` or dismissal;
+   3. **the approval still describes the code** — see the staleness test below;
+   4. **no `pendingDecisions[]` entry is unresolved** — blocking or not;
+   5. every human comment/thread has a recorded `replyUrl`, and every agreed-and-fixed
+      thread `isResolved`;
+   6. CI rollup fully green — nothing failing, no required check pending;
+   7. `mergeable == MERGEABLE` and `mergeStateStatus` not in
+      `DIRTY / BLOCKED / BEHIND / UNSTABLE`;
+   8. **your base is landable** — it is the integration branch. If your base is another
+      task's branch whose PR is **still open**, or your **join branch**, do NOT merge:
+      merging would inject your commits into a parent PR nobody reviewed them in (or
+      into infrastructure). Keep the approval in `approvals[]`, report
+      `approved_awaiting_base`, and merge on the tick after your base lands (or after
+      the join retires and you re-target to integration). **This is not a freeze** —
+      the PR is ready, your dependents already build on your branch, and only the
+      button waits.
+
+   > **Staleness test (guard 3) — "no considerable change since approval."** Compare
+   > `headRefOid` with the `approvedSha` from your ledger. The approval survives only
+   > when the head is:
+   > - **identical** to `approvedSha`; or
+   > - a **pure rebase/merge of the base** — your branch's own patch set against its
+   >   merge-base is unchanged (compare `git patch-id` over
+   >   `git diff <mergeBase>..<approvedSha>` and `git diff <mergeBase>..HEAD`); or
+   > - **`trivial`-class only** — the post-approval diff touches nothing but comments,
+   >   docs, or formatting, with no behavior change.
+   >
+   > Any other change — logic, tests, config, dependencies, migrations, CI — makes the
+   > approval **stale**. **When in doubt, stale.** Then: do **not** merge; post a
+   > comment saying the approval predates `<what changed>` and re-request the
+   > approver; wait for a fresh one.
+
+   **If every guard passes:**
+   1. If still draft → `gh pr ready <n>` (a draft PR can't be merged).
+   2. **Post the authorization record first, and capture its URL** — who approved, at
+      which SHA, what changed since (nothing / rebase / trivial), and each guard that
+      passed. **NO SILENT MERGES**: a merge nobody can audit from the PR itself is the
+      same defect as a silent fix.
+   3. Merge into your base with a method the repo allows (`gh repo view --json
+      squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`; prefer squash):
+      `gh pr merge <n> --squash`. **Do not pass `--delete-branch`** while another
+      task's `baseBranch` or join branch may point at your branch — the dependent
+      re-targets on its next tick, and Cleanup removes the branch anyway.
+   4. Record `autoMerge {authorizedBy, approvedSha, mergedSha, headDelta, guards,
+      mergedAt, commentUrl}` and append it to `decisionLog`; set `status = merged`.
+   5. Continue straight into **Cleanup** in this same invocation, then you die.
+
+   **If any guard fails, don't merge and don't go quiet about it:** reply/comment with
+   the specific guard that failed (e.g. "approval from @x is at `abc123`; head is
+   `def456` with logic changes — re-requesting review"), and report the true state.
+7. Write `lastCheckedAt` and the updated `status` to `tasks/<id>.json`, run the NO
    SILENT FIXES assertion, then **return** your summary `{id, status, prNumber,
-   merged?, renamedTitle?, prState, note}`. `prState` is the TRUE state observed
-   this tick — one of `changes_requested | awaiting_review | ci_red | conflict |
-   approved_green_awaiting_merge | merged` — so the orchestrator/console reports
-   reality (e.g. "awaiting review", not "awaiting merge"). Only emit
-   `approved_green_awaiting_merge` when reviewDecision=APPROVED **and** CI green
-   **and** mergeable clean. **Never click merge** — leave that to the human.
+   merged?, autoMerged?, renamedTitle?, prState, openDecisions, note}`. `prState` is
+   the TRUE state observed this tick — one of `changes_requested | awaiting_review |
+   awaiting_human_decision | ci_red | conflict | approved_awaiting_base |
+   approved_green_awaiting_merge |
+   auto_merged | merged` — so the orchestrator/console reports reality (e.g. "awaiting
+   review", not "awaiting merge"). Only emit `approved_green_awaiting_merge` when
+   reviewDecision=APPROVED **and** CI green **and** mergeable clean **and** an
+   auto-merge guard held it back (say which in `note`). `openDecisions` carries every
+   unresolved decision `{id, question, commentUrl, blocking}` so the orchestrator can
+   put it in the run's `attention` list. **Never merge the plan PR** — that gate is
+   the human's, always.
 
 ## PR title convention — always match the cycle's latest PR
 
@@ -393,6 +647,15 @@ multi-section description.
   files/services or has real design decisions worth a diagram.
 
 **Rules that hold for every PR, both sizes:**
+- **Open decisions go FIRST, in both sizes.** If any exist, the body opens with an
+  `## ⚠️ Open decisions` section — one line each: `**D<n>** (blocking) — <question> →
+  [answer here](<commentUrl>)`, struck through once resolved with the answer and the
+  SHA. This is the **only** part of the body you keep updating; everything else is
+  written once. No open decisions → omit the section entirely.
+- **State the stacking in words, not in the draft flag.** If the PR sits on another
+  task's branch or a join, say so on the first line: `Stacked on #123 (adds the
+  matcher) — merge after it`, or `Sits on a join of #123 + #124`. A reviewer must be
+  able to tell what they're looking at without decoding branch names.
 - **Be didactic about references.** Never point at an opaque internal id (`T2b`,
   "wave 2", "the matcher task") and expect the reader to decode it. When you must
   reference sibling work, give the **PR number + a one-line plain description** —
@@ -420,7 +683,9 @@ actually has:
 | → `implementing` (dispatched) | Move to **In Progress**; comment "🤖 started · branch `<branch>`" |
 | → `open` (task PR opened) | Move to **In Review / Code Review**; comment the **PR link** |
 | → `fixing` (review/CI feedback) | Keep In Review (use a "Changes Requested" state if one exists) |
-| → `merged` (task PR merged into its base) | Move sub-issue to **Done/Merged**; comment "merged into `<baseBranch>` (cycle plan PR #<n>)" |
+| **open decision raised** (blocking) | Use a **Blocked / Needs Info** state if one exists (else keep In Review); comment the **question + the PR link where it's answered** |
+| **open decision resolved** | Back to **In Review**; comment the answer and what changed |
+| → `merged` (task PR merged into its base) | Move sub-issue to **Done/Merged**; comment "merged into `<baseBranch>` (cycle plan PR #<n>)" — say **who authorized it** when it was an approval-authorized auto-merge |
 | → `failed` | Move to **Blocked**; comment the blocker + what's needed |
 
 Rules:

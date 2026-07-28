@@ -75,8 +75,21 @@ must never be committed onto a feature branch).
       "ciState": "SUCCESS"
     }
   },
+  "approvalMergePolicy": "auto",
+  "//approvalMergePolicy": "'auto' (default) = a task PR with an INTACT human approval is merged by its own agent once every guard passes (Approval-authorized auto-merge). 'off' = the human always clicks merge. The plan PR → main is NEVER auto-merged under either setting.",
   "mergeAuthorization": null,
-  "//mergeAuthorization": "null = default (never merge; human merges). Set ONLY on an explicit user grant, e.g. { scope: 'wave:1' | 'task:T3' | 'cycle', grantedBy: 'user', at: '<iso>', note: '<verbatim instruction>' }. Merge only within scope, only when green + not draft.",
+  "//mergeAuthorization": "A SEPARATE, broader grant, independent of approvalMergePolicy. null = none. Set ONLY on an explicit user instruction, e.g. { scope: 'wave:1' | 'task:T3' | 'cycle', grantedBy: 'user', at: '<iso>', note: '<verbatim instruction>' }. Merge only within scope, only when green + not draft. Never covers the plan PR.",
+  "attention": [
+    { "kind": "decision", "taskId": "T2", "prNumber": 1207, "id": "D1",
+      "question": "Purge or archive expired invites?",
+      "url": "https://github.com/org/repo/pull/1207#issuecomment-99", "blocking": true },
+    { "kind": "plan-pr-ready", "prNumber": 1200, "note": "merge #1200 into main to close the cycle" }
+  ],
+  "stalls": [
+    { "id": "T4", "reason": "blocked-by-failed-dep", "sinceTick": "2026-06-23T13:10:00Z",
+      "note": "T3 failed its gate; T4 cannot build its join" }
+  ],
+  "unresolvedDecisions": [],
   "modelPolicy": {
     "spec":    { "model": "opus",   "effort": "high" },
     "high":    { "model": "opus",   "effort": "medium" },
@@ -133,11 +146,30 @@ then uses it to pick the Implement agent's model. `agentKind` ∈
   "complexity": "medium",
   "branch": "cadence/matchmaking-followups-t1-add-reply-correlation-matcher",
   "baseBranch": "cadence/matchmaking-followups-integration",
+  "joinBranch": null,
+  "joinedShas": null,
   "worktreePath": ".claude/worktrees/cadence-matchmaking-followups-t1-add-reply-correlation-matcher",
   "prNumber": 1203,
   "prUrl": "https://github.com/org/repo/pull/1203",
   "isDraft": true,
+  "draftReason": "ci_red",
+  "readyAt": null,
   "lastCheckedAt": "2026-06-23T12:25:00Z",
+  "pendingDecisions": [
+    { "id": "D1", "question": "Purge or archive expired invites?",
+      "options": ["A — archive (soft)", "B — purge (hard delete)"],
+      "provisionalChoice": "A", "impact": "Irreversible for existing rows if B ships",
+      "blocking": true, "status": "open",
+      "commentUrl": "https://github.com/org/repo/pull/1203#issuecomment-99",
+      "askedAt": "2026-06-23T12:24:00Z", "remindedAt": null,
+      "answeredBy": null, "answeredAt": null, "resolvedInSha": null }
+  ],
+  "approvals": [
+    { "login": "hugoseabra", "isHuman": true, "association": "OWNER",
+      "state": "APPROVED", "approvedSha": "9f1c2ab…", "at": "2026-06-23T13:02:00Z" }
+  ],
+  "autoMerge": null,
+  "//autoMerge": "Set only when this agent merged its own PR under an intact human approval: { authorizedBy, approvedSha, mergedSha, headDelta: 'identical'|'rebase'|'trivial', guards: {…}, mergedAt, commentUrl }.",
   "answeredComments": [
     { "commentId": 882134, "threadId": "PRRT_kwDO…", "verdict": "agree",
       "replyUrl": "https://github.com/org/repo/pull/1203#discussion_r882140",
@@ -165,14 +197,18 @@ then uses it to pick the Implement agent's model. `agentKind` ∈
 - `specified` — spec done, `complexity` written (`medium`/`high` only — lighter tasks
   fused past this), **idle** → spawn an **implement** agent at `modelPolicy[complexity]`.
 - `implementing` — an implement agent is **in flight** (worktree+branch+code, pre-PR). Skip.
-- `open` — PR created (base = the task's `baseBranch`: integration, or its single
-  blocker's branch when stacked), **settled/idle**, awaiting human/CI → this is the
-  ONLY status a Monitor pass runs on.
+- `open` — PR created (base = the task's `baseBranch`: integration, its single
+  blocker's branch when stacked, or its join branch), **settled/idle**, awaiting
+  human/CI → this is the ONLY status a Monitor pass runs on. `open` covers both draft
+  and ready — the draft flag is `isDraft`, re-evaluated by the readiness checklist on
+  every tick, never by asking the user.
 - `fixing` — a fix agent is **in flight** pushing review/CI/conflict fixes; returns to
   `open`. Skip while in flight.
-- `merged` — the task PR was merged **into its base** (integration, or its blocker's
-  branch when stacked) — by the human, or by you only under an explicit user merge
-  authorization; cleanup next.
+- `merged` — the task PR was merged **into its base** (integration, its blocker's
+  branch when stacked, or its join branch) — by the human, by its own agent under an
+  **intact human approval** (`approvalMergePolicy: "auto"`, all guards passed → see
+  `autoMerge`), or under an explicit user merge authorization; cleanup next. The plan
+  PR is never in this set by any route but a human's click.
 - `done` — merged AND worktree/branch destroyed. Terminal (the task agent has died).
 - `failed` — gate couldn't go green; PR left as draft with a blocker note for the human.
 
@@ -203,6 +239,23 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
   Re-baselined right after that task's agent completes, so the agent's own
   replies/pushes don't read as news next tick. Detection only — the orchestrator
   never triages or acts on PR content.
+- `approvalMergePolicy` — `"auto"` (default) or `"off"`. Under `"auto"`, a task PR
+  carrying an **intact human approval** is merged by its own agent once every guard
+  passes (human approver, approval not superseded, head unchanged in substance since
+  `approvedSha`, no unresolved decision, all comments answered, CI green, mergeable
+  clean). The **plan PR → `main` is never auto-merged** under any setting.
+- `attention` — orchestrator-owned, rebuilt every tick by reading the task files: the
+  list of things that actually need the human, each with a link where they act (open
+  decisions, parked review loops, failed tasks, PRs awaiting review >24h, the plan PR
+  once ready). It is printed in every turn summary — a decision that lives only inside
+  a PR comment thread is invisible, which is the failure this field exists to prevent.
+- `stalls` — tasks that reported the same non-dispatchable reason for 3+ consecutive
+  ticks (`{id, reason, sinceTick, note}`), from the **Flow audit**. A `waiting-for-merge`
+  reason is a defect, not a stall: it must be converted (join/rebase/re-target) the
+  same tick.
+- `unresolvedDecisions` — decisions that were still open when their PR was merged
+  anyway (by a human): the question, the default that therefore shipped, and the PR
+  link. Carried into the final run summary as follow-ups so nothing evaporates.
 - `integrationBranch` — stacked base; every task branches from it and PRs target it.
 - `integrationWorktree` — the checkout for `integrationBranch`. Its creation is where
   the cycle's plan/design docs are swept off `main` and committed (step 1.3), and where
@@ -213,12 +266,41 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
 - `nextWakeupAt` — when `ScheduleWakeup` re-enters. Monitoring is in-session only — no
   cron / external scheduled agent.
 - `baseBranch` — a task's PR base, resolved from its blockers: the `integrationBranch`
-  (0 or 2+ blockers) or the **single blocker's branch** (stacked). Never `main`. Rebases
-  and PR creation use this exact value; update it if a stacked base merges away (then
-  re-base onto integration).
-- `isDraft` — whether the task PR is a GitHub draft. A PR is draft while it isn't safe
-  to merge — stacked on an unmerged base, CI not green, or an agent in flight — so a
-  human can't merge it mid-flight. Un-drafted only when genuinely mergeable.
+  (no blockers), the **single blocker's branch** (stacked), or this task's
+  **`joinBranch`** (2+ blockers). Never `main`. Rebases and PR creation use this exact
+  value; update it when a stacked base merges away or a join retires (then re-base onto
+  integration and `gh pr edit --base` it).
+- `joinBranch` / `joinedShas` — for a 2+-blocker task: the synthetic base
+  `cadence/<slug>-t<id>-join` (integration + every blocker's branch merged in) and the
+  blocker head SHAs it was built from. It exists so the task can start while its
+  blockers are still open — it is infrastructure, never gets a PR, and is deleted once
+  every blocker has merged into integration and the PR is re-targeted there. `null` for
+  0/1-blocker tasks.
+- `isDraft` / `draftReason` / `readyAt` — draft means **not reviewable yet**, not "not
+  mergeable yet": an agent in flight, a red gate/CI, no self-review, an unwritten body,
+  or an unanswered **blocking** open decision. Being stacked on an unmerged base is
+  **not** a reason. The readiness checklist runs at PR-open and every monitor tick and
+  the agent un-drafts itself the moment it passes — the user is never asked. `draftReason`
+  records which item failed so the run summary can report the truth; `readyAt` stamps
+  the un-draft.
+- `pendingDecisions` — questions that genuinely need a human (product/policy intent,
+  ambiguous criteria, irreversible or security-relevant choices), each posted on the PR
+  as an answerable numbered comment with options and a provisional default, pinned in
+  the PR body, and mirrored into `run.json.attention`. `blocking: true` keeps the PR
+  draft and disqualifies auto-merge until answered. `status`: `open | resolved`.
+  Anything settleable on the merits is NOT here — it's a `decisionLog` line.
+- `approvals` — per-reviewer approval ledger built from each tick's `reviews` payload:
+  `{login, isHuman, association, state, approvedSha, at}`. `approvedSha` is the commit
+  the reviewer approved — the anchor for the auto-merge staleness test. A later
+  `CHANGES_REQUESTED` or a dismissal clears that reviewer's approval.
+- `autoMerge` — set only when the task's own agent merged the PR under an intact human
+  approval: who authorized it, `approvedSha` → `mergedSha`, the `headDelta` class
+  (`identical` / `rebase` / `trivial`), the guards that passed, and the URL of the
+  authorization comment posted before merging (NO SILENT MERGES). An approved PR whose
+  **base isn't landable** (a parent task's branch with a still-open PR, or a join
+  branch) is not merged — it reports `approved_awaiting_base` and merges on the tick
+  after the base lands. That's a waiting button, not a stalled task: its dependents are
+  already building on its branch.
 - `answeredComments` — `{commentId, threadId, verdict, replyUrl, threadResolved}` per
   handled comment. `replyUrl` is proof the reply posted (NO SILENT FIXES). For an
   agreed-and-fixed item, `threadResolved: true` records that the review thread was
@@ -242,10 +324,16 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
    work** (auth/MCP can drop between sessions); a pure monitor tick skips the pings.
 2. **Change detection:** ONE batched read-only GraphQL call over all the cycle's open
    PRs; diff each against `prSnapshot`; store the fresh values. No delta on an idle
-   `open` task → spawn nothing for it (quiet).
-3. **Spawn one per-task agent per IDLE active task with work** (its **base branch
-   exists** — integration, or its single blocker's branch when stacked; NOT "blockers
-   merged" — `agentInFlight: false`) in a single message, model by phase:
+   `open` task → spawn nothing for it (quiet) — unless its readiness/auto-merge guards
+   or a base advance could now pass, or an open decision is due its one reminder.
+2b. **Flow audit:** classify why every non-terminal task isn't advancing. Anything
+   held because another PR hasn't merged is a **defect** — convert it this tick (build
+   or refresh the join base, rebase, re-target) and dispatch it. Record 3-tick
+   repeats in `stalls`. Rebuild `attention` from the task files.
+3. **Spawn one per-task agent per IDLE active task with work** (its **base is
+   available** — integration, its single blocker's branch when stacked, or all
+   blockers' branches existing so a join can be built; NOT "blockers merged" —
+   `agentInFlight: false`) in a single message, model by phase:
    `pending`→**spec** (opus/high; fuses into implement for `trivial`/`low`),
    `specified`→**implement** (`modelPolicy[complexity]`), `open` **with a snapshot
    delta**→**monitor** (sonnet), `merged`→**cleanup** (sonnet; recovery only — the
@@ -261,11 +349,17 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
    (cached `lastStatus`, `prTitlePattern` on a reported rename, plan-PR task lines
    added once on first open); **re-baseline `prSnapshot`** for each PR whose agent
    acted. Recover any agent past its stale lease.
-5. **Dispatch (no merge gate):** any task whose **base branch now exists** becomes
-   active next tick — a stacked child the moment its blocker's branch is pushed, not
-   when it merges. Flow; never freeze a task waiting on another's merge.
-6. When all tasks are `done`/`failed` → un-draft the plan PR (`planPrStatus = ready`);
-   delegate plan-PR CI/comment fixes to an agent in the integration worktree.
+5. **Dispatch (no merge gate):** any task whose **base becomes available** is active
+   next tick — a stacked child the moment its blocker's branch is pushed, a
+   multi-blocker task the moment all its blockers' branches exist. Flow; never freeze
+   a task waiting on another's merge.
+6. When all tasks are `done`/`failed` → un-draft the plan PR (`planPrStatus = ready`)
+   on your own, put "merge #<n> into `main`" at the top of `attention`, and delegate
+   plan-PR CI/comment fixes to an agent in the integration worktree. **Never merge the
+   plan PR.**
+6b. **Report honestly:** the turn summary lists each PR's true state (draft + why,
+   awaiting review, awaiting decision, approved, auto-merged, merged) and prints
+   `attention`. Never "all ready for review" while any PR is a draft.
 7. If any task is active OR `planPrStatus ≠ merged` → **ScheduleWakeup again**
    (mandatory — turn-end invariant) at the adaptive interval from `monitorBackoff`:
    hot tick → reset `quietTicks`, sleep `baseSeconds`; fully quiet tick → increment

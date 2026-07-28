@@ -244,7 +244,9 @@ LEDGER          N inventoried · N assigned · N deferred · 0 unaccounted
 CONFLICTS       serialized pairs + why
 HANDOFF         "Dispatch tasks as their base branches appear and FLOW — don't gate
                 a wave on the previous wave merging. A task with one blocker stacks
-                its PR on that blocker's branch; 0/2+ blockers → base = integration."
+                its PR on that blocker's branch; a task with 2+ blockers gets a join
+                branch (integration + all blockers) so it starts too; no blockers →
+                base = integration."
 ```
 
 ## Guardrails

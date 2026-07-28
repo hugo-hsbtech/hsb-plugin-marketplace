@@ -12,16 +12,35 @@ the Simple body for a `low`/small change, the Full body only for genuinely compl
 
 ---
 
+## Open decisions block — goes at the TOP of either body, when any exist
+
+The only section you keep updating after the PR is opened. Omit it entirely when there
+are no open decisions. Each line links to the comment where the question is answered.
+
+```markdown
+## ⚠️ Open decisions
+
+> These need a human. Answer in the linked comment (e.g. reply `D1: B`); this PR won't
+> be marked ready or merged while a blocking one is open.
+
+- **D1** (blocking) — Should expired invites be purged or archived? → [answer here](<commentUrl>) · *in effect: archive*
+- ~~**D2** — Retry backoff: 3× or 5×?~~ → answered by @user: 5× · implemented in `abc1234`
+```
+
+---
+
 ## Simple body — use for `complexity: low` (and small `medium`)
 
 For a one-file / low-risk change. A few sentences is the whole PR. **No Mermaid, no
 acceptance-criteria checklist, no multi-section scaffolding.**
 
 ```markdown
+<!-- If there are open decisions, the ⚠️ Open decisions block goes here, first. -->
 ## What & why
 
 <1–3 plain sentences: what this changes and the problem it solves.>
-<If it builds on another PR, say so with the number: "Stacked on #123 (adds X).">
+<If it sits on another PR, say so on its own line: "Stacked on #123 (adds X) — merge
+after it." / "Sits on a join of #123 + #124.">
 
 ## How to test
 
@@ -40,12 +59,14 @@ acceptance-criteria checklist, no multi-section scaffolding.**
 For changes that span multiple files/services or carry real design decisions.
 
 ```markdown
+<!-- If there are open decisions, the ⚠️ Open decisions block goes here, first. -->
 ## What & why
 
 <1–3 sentences: the demand in plain language — what problem this solves and for whom.>
 
 **Task:** <T-id> · **Source:** <Linear/Jira key | plan path> · **Cycle:** <slug>, wave <n>
-**Base:** `<baseBranch>` — <plain note: "the integration branch" or "stacked on #123 (adds X)">
+**Base:** `<baseBranch>` — <plain note: "the integration branch", "stacked on #123
+(adds X) — merge after it", or "a join of #123 + #124, whose conflicts are resolved here">
 **Acceptance criteria**
 - [ ] <criterion 1>
 - [ ] <criterion 2>

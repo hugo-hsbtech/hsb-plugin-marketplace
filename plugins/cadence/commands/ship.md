@@ -1,16 +1,17 @@
 ---
-description: Autonomously execute a parallel cycle plan — flows end to end (no merge gates), per task drives worktree→branch→PR (stacked on its blocker, or integration) then monitors comments/CI/conflicts until a human merges. Never pushes to main; never merges unless the user explicitly authorizes it.
+description: Autonomously execute a parallel cycle plan — flows end to end (no merge gates), per task drives worktree→branch→PR (stacked on its blocker, joined for multi-blocker tasks, else integration) then monitors comments/CI/conflicts until it merges. Never pushes to main; never merges the plan PR; merges a task PR only under an intact human approval. Questions it can't settle become answerable open decisions on the PR.
 argument-hint: "<path to a cycle-plan .md (docs/plans/proposed/<datetime>-<slug>-<task-id>.md, or leave empty to use the plan in context / run /cadence:plan first)>"
 ---
 
 Load and follow the `cadence-executor` skill (plugin `cadence`) to autonomously execute
 a parallel cycle plan. This **implements and drives PRs to merge-ready and FLOWS end
 to end** — it never freezes a task waiting for another's PR to merge (dependencies are
-expressed by PR base: stacked on a single blocker, or targeting integration for 0/2+
-blockers). Hard rules: **never push or commit to `main`; by default never merge a PR —
-the human merges — unless the user explicitly authorizes merging for a named
-task/wave/cycle; keep any not-yet-mergeable PR a draft; and keep monitoring each PR
-while it is open.**
+expressed by PR base: stacked on a single blocker, a **join branch** carrying all
+blockers for a multi-blocker task, else the integration branch). Hard rules: **never
+push or commit to `main`; never merge the plan PR (that gate is the human's); merge a
+task PR only under an intact human approval or an explicit user grant; a PR is a draft
+only while it is genuinely not reviewable — that call is yours, never the user's; and
+keep monitoring each PR while it is open.**
 
 ## Plan input
 
@@ -63,34 +64,52 @@ the per-task playbook.
    Each agent
    resumes from its `tasks/<id>.json`, owns a **durable git worktree** with a
    **descriptive** `cadence/<slug>-t<id>-<task-slug>` branch (the slug reflects what the
-   task does) off its **base** — the integration branch (0/2+ blockers) or its **single
-   blocker's branch** (stacked). It advances its task one
+   task does) off its **base** — the integration branch (no blockers), its **single
+   blocker's branch** (stacked), or its own **join branch** (integration + all its
+   blockers merged, built by the agent itself for a 2+-blocker task). It advances its task one
    step: spec (superpowers brainstorming→writing-plans, decides complexity) → implement
    (TDD, auto-approving gates) → open its PR → (later, when settled) monitor/fix →
    cleanup. It is the **sole writer of its `tasks/<id>.json`** and does all its own
    `gh` work, and it **dies when its PR
    merges**.
-3. **Flow, don't gate on merges.** A task is dispatched as soon as its **base branch
-   exists** — a stacked child the moment its blocker's branch is pushed, not when it
-   merges. Each task PR targets its base (integration, or its blocker's branch), never
-   `main`; keep any PR that isn't safe to merge (stacked / CI-not-green / agent
-   in-flight) as a **draft**. PR bodies follow `references/pr-template.md`, **sized to
-   complexity** (a simple low-complexity change gets a short body, not the full
-   mermaid+UAT template), didactic, referencing siblings by **PR number**, not bare
-   task ids.
+3. **Flow, don't gate on merges — and audit it every tick.** A task is dispatched as
+   soon as the branches it depends on **exist** — a stacked child the moment its
+   blocker's branch is pushed, a multi-blocker task as soon as it can build its join.
+   Anything held because another PR hasn't merged is a **defect**: convert it (build or
+   refresh the join, rebase, re-target) that same tick. Each task PR targets its base,
+   never `main`. **Draft means "not reviewable yet"** (agent in flight, red gate/CI, no
+   self-review, unwritten body, unanswered blocking decision) — *not* "not mergeable
+   yet"; being stacked is **not** a reason to stay draft. Un-draft yourself the moment
+   the readiness checklist passes, and **never ask the user whether to**. PR bodies
+   follow `references/pr-template.md`, **sized to complexity** (a simple low-complexity
+   change gets a short body, not the full mermaid+UAT template), didactic, referencing
+   siblings by **PR number**, not bare task ids.
 4. The per-task agent monitors its own PR every tick: **judge** each review/comment on
    its merits (agree → fix · better alternative → fix differently · wrong/out-of-scope
    → decline with a reasoned reply · ambiguous → ask) — never blindly obey; fix red CI;
-   rebase onto its base as the base advances — all with **verified `gh` replies** (no
-   silent fixes), until the **human merges**. On merge it cleans up and retires.
-5. Re-arm the **adaptive ScheduleWakeup loop** each turn — 180s while hot (agents in
+   rebase/refresh its base as it advances; harvest answers to its open decisions — all
+   with **verified `gh` replies** (no silent fixes). When a **human approves** its PR
+   and every guard holds (approval intact and not stale, no open decision, all comments
+   answered, CI green, mergeable clean), it merges its own PR into its base, posting
+   the authorization first. On merge it cleans up and retires.
+5. **A question you can't settle becomes an open decision, not a buried default.** Post
+   it on the PR as a numbered `D<n>` comment with real options, the provisional default
+   and an answer protocol; pin it at the top of the PR body; track it in the task file;
+   keep the PR draft while it's blocking; and repeat it in **every** turn summary's
+   "needs you" list with its link. Never ship a pending question silently, and never
+   turn it into a blocking prompt to the user.
+6. Re-arm the **adaptive ScheduleWakeup loop** each turn — 180s while hot (agents in
    flight or changes detected), doubling per quiet tick up to `maxSeconds`
    (default 1800) while everything is parked on humans; any activity snaps it back
    to 180s. Dispatch tasks as their base branches appear (no merge gate). End the
    loop only when the **plan PR is merged into `main`** and every task is
    `done`/`failed`.
 
-Be conservative and honest: **by default never merge** (leave it to the human) — unless
-the user has explicitly authorized merging for a named task/wave/cycle, in which case
-honor exactly that scope (green, non-draft only) and log it; never touch main; and if a
-task's gate can't go green, leave its PR as a draft with a clear blocker note.
+Be autonomous about process and honest about state: **decide** drafts, bases, rebases
+and readiness yourself; **merge a task PR only** under an intact human approval that
+still describes the code (or an explicit user grant for a named scope), always posting
+the authorization on the PR first; **never merge the plan PR** and never touch `main`.
+Report each PR's real state — never "all ready for review" while any PR is a draft —
+and end every turn with the "needs you" list (open decisions with their answer links,
+parked reviews, failures, the plan PR when it's ready). If a task's gate can't go green,
+leave its PR as a draft with a clear blocker note.
