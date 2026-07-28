@@ -139,15 +139,23 @@ symptom, and never quietly widen scope beyond what the user picked in step 3.
 
 ## Versioning policy (bump on every AI enhancement)
 
-**Every time an AI agent enhances this project, it MUST bump the semantic version in `plugins/cadence/.claude-plugin/plugin.json` as part of the same change** — never leave an enhancement unversioned. The bump size follows the nature of the change (`MAJOR.MINOR.PATCH`):
+**A version marks a batch that is handed over, not an edit.** One version per *shipped batch* — never one per edit, per follow-up, or per turn in the same working conversation. A session that fixes six things is **one** bump sized by the largest change in it, not six bumps. (Minting a version per edit is how `3.3.0` became `3.10.0` in a single afternoon with nothing validated in between; each number then means nothing and the tag list stops being useful.)
+
+**How it works in practice:**
+- **While working:** accumulate entries under `## Unreleased` in `CHANGELOG.md`. Commit freely — commits are cheap and reversible, versions are not. **Do not touch `plugin.json` or create a tag.**
+- **When the batch is handed over** — the user says ship/release, or the session's work is done and reported — bump `plugins/cadence/.claude-plugin/plugin.json` **once**, move `Unreleased` into a version heading, commit, and tag.
+- **If unsure whether the batch is finished, don't bump.** An unversioned improvement sitting in `Unreleased` costs nothing; a released version you immediately supersede costs the meaning of every other number.
+- **A version nobody has run is a candidate, not a result.** Prefer letting a batch be exercised by a real cycle (and its report) before stacking another release on top of it.
+
+The bump size follows the largest change in the batch (`MAJOR.MINOR.PATCH`):
 
 - **PATCH** (`x.y.Z`) — wording clarifications, typo/formatting fixes, tightening prose, or reference/template edits that do **not** change any skill's behavior or the planner↔executor contract.
 - **MINOR** (`x.Y.0`) — backward-compatible additions: a new skill or command, a new optional plan-doc/state field, or added behavior that doesn't break existing plans or state files.
 - **MAJOR** (`X.0.0`) — breaking changes: renaming/removing a skill or command, or any change to the plan-doc metadata header, filename convention, wave/touch-set fields, or state schema that would break plans or `.cadence/` runs produced by an earlier version.
 
-When a single change spans several types, bump by the highest that applies. State the resulting version in the change summary. If the future repo adds a `CHANGELOG.md`, record the bump and its reason there too.
+When a batch spans several types, bump by the highest that applies. State the resulting version in the change summary, and record the release and its reasons in `CHANGELOG.md`.
 
-**Every version bump MUST also create a git tag** on the commit that contains the bump, and the tag MUST be pushed together with the commit. Tags are plugin-scoped (the marketplace can host several plugins, each with its own version): `<plugin>-v<MAJOR.MINOR.PATCH>`, e.g. `cadence-v3.2.0`. Use an annotated tag whose message is a one-line summary of the change (`git tag -a cadence-v3.2.0 -m "…"`), then `git push origin <tag>` (or push with `--follow-tags`). A bump without its tag is incomplete — if you find a bumped version with no matching tag, backfill the tag on the commit that introduced that version.
+**Every version bump MUST also create a git tag** (one tag per release, so the tag list reads as a release history rather than an edit log) on the commit that contains the bump, and the tag MUST be pushed together with the commit. Tags are plugin-scoped (the marketplace can host several plugins, each with its own version): `<plugin>-v<MAJOR.MINOR.PATCH>`, e.g. `cadence-v3.2.0`. Use an annotated tag whose message is a one-line summary of the change (`git tag -a cadence-v3.2.0 -m "…"`), then `git push origin <tag>` (or push with `--follow-tags`). A bump without its tag is incomplete — if you find a bumped version with no matching tag, backfill the tag on the commit that introduced that version.
 
 ## Documentation per plugin (philosophy)
 

@@ -31,6 +31,8 @@ plugins/<name>/                    one directory per plugin
 ```
 
 ```
+CHANGELOG.md                       releases per plugin; work in progress sits under
+                                   "Unreleased" until a batch is shipped
 docs/feedback/<date>-<slug>.md     one file per improvement round: the findings from a
                                    real run, what changed, and what deliberately didn't
 ```
