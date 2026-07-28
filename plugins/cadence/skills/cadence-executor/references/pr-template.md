@@ -135,3 +135,63 @@ flowchart LR
 
 <Migrations, feature flags, follow-ups, anything the reviewer should watch. Keep short.>
 ```
+
+---
+
+## Plan (integration) PR body — the cycle's home
+
+The plan PR is where a human goes to understand the **shape** of the cycle, so it carries
+the plan itself, not just a list. Written once at run open; the map table gains one row
+per task as its PR opens; the diagrams are redrawn only if the *plan* changes.
+
+```markdown
+# Cycle: <slug>
+
+<2–4 sentences: what this cycle delivers and why, in plain language.>
+
+**Plan:** `docs/plans/proposed/<...>.md` · **Tasks:** <n> in <n> waves · **Label:** `cadence:<slug>`
+
+## The plan
+
+### Waves — what runs in parallel, and what waits
+
+```mermaid
+graph LR
+  subgraph W1[Wave 1]
+    T1["T1 · add reply matcher"]
+    T4["T4 · metrics dashboard"]
+  end
+  subgraph W2[Wave 2]
+    T2["T2 · wire inbound pipeline"]
+  end
+  T1 --> T2
+```
+
+### Branch topology — where each PR is based
+
+```mermaid
+graph RL
+  main([main])
+  integ["cadence/&lt;slug&gt;-integration"]
+  integ -. "this PR — merged LAST, by you" .-> main
+  T1["T1 #1206 · reply matcher"] --> integ
+  T2["T2 #1207 · inbound pipeline (stacked)"] --> T1
+  T3["T3 #1208 · backfill (built on a join)"] --> integ
+```
+
+## Task → PR map
+
+| Task | What it does | PR | Base |
+|---|---|---|---|
+| T1 | Add the reply-correlation matcher | #1206 | integration |
+| T2 | Wire the matcher into the inbound pipeline | #1207 | #1206 (stacked) |
+
+## How this cycle closes
+
+Each task PR lands in the integration branch — merged by you, or by Cadence once you've
+approved it. **You merge this PR into `main` last**; that's the only merge Cadence never
+performs.
+```
+
+> Node labels follow the same identity rule as everywhere else: **task id + what it does
+> + PR number** once the PR exists. Never a bare `T3`.

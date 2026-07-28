@@ -34,6 +34,7 @@ still describes the code (see [Approval-authorized auto-merge](#approval-authori
 - [Task lifecycle](#task-lifecycle)
 - [Draft, readiness, and merging](#draft-readiness-and-merging) — including [approval-authorized auto-merge](#approval-authorized-auto-merge)
 - [When you merge, the others don't break](#when-you-merge-the-others-dont-break)
+- [What the plan PR shows you](#what-the-plan-pr-shows-you)
 - [Which PR is which task](#which-pr-is-which-task)
 - [The cycle report](#the-cycle-report--evidence-of-how-the-run-actually-went) — evidence of how the run actually went
 - [Open decisions](#open-decisions--questions-you-can-actually-answer) — questions you can actually answer
@@ -160,10 +161,18 @@ plan docs and is the convergence point every task ultimately lands on. It opens 
 
 - **0 blockers** → base = the integration branch.
 - **exactly 1 blocker** → base = that blocker's branch (a *stacked* PR).
-- **2+ blockers** → base = a **join branch** built for that task: integration with every
-  one of its blockers' branches merged in. Cross-blocker conflicts are resolved there,
-  once. When all its blockers have landed in integration the join carries nothing
-  unique, so the PR is re-targeted to integration and the join branch is deleted.
+- **2+ blockers** → the task **branches off a join branch** built for it (integration
+  with every one of its blockers' branches merged in), so it compiles and tests against
+  their code — but its **PR targets integration, never the join**. Cross-blocker
+  conflicts are resolved in the join, once. When the blockers land, the join is simply
+  deleted.
+
+  > **Nothing ever merges into a join.** A join merges nowhere, so work merged *into* one
+  > is stranded off integration — the source branch is auto-deleted, the work disappears
+  > from the cycle, and a rescue PR has to be invented to carry it across. That's why the
+  > PR targets integration from the start. Its diff temporarily shows the unmerged
+  > blockers' files too; that's declared in the body ("34 files — 8 this task's, 26 from
+  > #35, not yet merged") and shrinks by itself as each blocker lands.
 
 **Flow, don't gate** — a task starts the moment the branches it depends on *exist*, not
 when their PRs *merge*. Work never freezes waiting on a human to click merge;
@@ -568,6 +577,25 @@ is a stale duplicate), and then **checks the scope**: `git diff origin/<base>...
 the resolution went wrong — it's fixed and re-checked before anyone is asked to review.
 The PR body carries `Files changed: N`, so a mismatch between the PR's stated scope and
 its diff is visible immediately, and a genuinely large diff has to explain itself.
+
+---
+
+## What the plan PR shows you
+
+The integration branch's **plan PR** is the cycle's home page. Its body opens with the
+plan itself, rendered as Mermaid — because a list of rows can't show you dependencies:
+
+1. **Waves + dependencies** — what runs in parallel and what's waiting on what.
+2. **Branch topology** — where each task's PR is based, so stacks and joins are visible.
+
+Below them sits the **task → PR map** (`Task | What it does | PR | Base`), one row added
+as each PR opens. GitHub renders each referenced PR's live state next to it, so that
+single page answers "what is this cycle, and where is it?" without anything being
+re-edited as work moves.
+
+The diagrams are **structure, not status** — drawn once from the plan, redrawn only if
+the plan itself changes (a task added, dropped, or re-based). Node labels follow the same
+rule as everywhere else: task id + what it does + PR number, never a bare `T3`.
 
 ---
 

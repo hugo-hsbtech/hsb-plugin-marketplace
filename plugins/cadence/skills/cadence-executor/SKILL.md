@@ -62,11 +62,23 @@ task's PR is **based**, so work flows without waiting for merges:
   branch exists — no need to wait for it to merge.
 - **Two or more blockers** → you can't stack on several branches at once, so build the
   base you need: a **join branch** `cadence/<slug>-t<id>-join`, cut from integration
-  with **every blocker's branch merged into it**. The task branches off the join and
-  its PR targets the join. It starts as soon as all its blockers' *branches exist* —
-  it never waits for them to merge. As blockers land in integration the join is
-  refreshed, and once they have all landed the join is empty of unique content, so the
-  PR is **re-targeted to integration** and the join branch is deleted (see Join base).
+  with **every blocker's branch merged into it**. Branch your work **off the join** so
+  you compile and test against your blockers' code — but the **PR targets the
+  integration branch, NEVER the join**. The task starts as soon as all its blockers'
+  *branches exist*; it never waits for them to merge.
+
+  > **NOTHING EVER MERGES INTO A JOIN BRANCH.** A join is scaffolding: it merges
+  > nowhere, so anything merged *into* it is stranded off integration — the source
+  > branch is auto-deleted on merge, the work vanishes from the cycle, the exit gate
+  > runs without it, and someone has to invent a rescue PR to carry it across. A task PR
+  > whose base is a join is a **defect**: re-target it to integration immediately
+  > (`gh pr edit <n> --base <integrationBranch>`), record it, surface it. This is not a
+  > style preference — it is the difference between work landing and work disappearing.
+
+  Because the PR targets integration while the branch sits on top of unmerged blockers,
+  its diff **temporarily shows those blockers' files too**. That is expected, not
+  pollution — declare it (see the scope check) and it shrinks to this task's own work by
+  itself as each blocker merges into integration.
 
 No task PR ever targets `main`. Once all tasks land in integration, the single plan PR
 is the human's one clean merge into `main`.
@@ -77,7 +89,8 @@ main
      ├─ cadence/<slug>-t1-add-reply-matcher          ← no blocker  → PR base: integration
      │   └─ cadence/<slug>-t2-wire-inbound-pipeline   ← needs t1    → PR base: t1's branch (stacked)
      └─ cadence/<slug>-t3-join  (= integration + t1 + t2)          ← synthetic base, not a PR
-         └─ cadence/<slug>-t3-backfill-correlations   ← needs t1+t2 → PR base: t3's join branch
+         └─ cadence/<slug>-t3-backfill-correlations   ← needs t1+t2 → branched off the join,
+                                                     but PR base: integration
 ```
 (Task branches are **descriptive**: `cadence/<slug>-t<id>-<task-slug>`, the slug says
 what the task does.)
@@ -512,16 +525,25 @@ the retirement rule:
 - **Construction (task agent):** `cadence/<slug>-t<id>-join`, cut from
   `origin/<integrationBranch>`, with each blocker's branch merged in, pushed. The task
   branch is cut from the join; the PR targets the join. Cross-blocker conflicts are
-  resolved **in the join branch** and called out in the PR body.
+  resolved **in the join branch** and called out in the PR body. **A join is per task,
+  never shared** — two tasks pointing at one join is how a join stops being scaffolding
+  and becomes a base people merge into.
 - **Refresh:** when any blocker's branch advances or lands, the task agent re-merges
   the current integration + blocker heads into the join on its next tick (Monitor pass
   step 4) — flow continues, nothing halts.
 - **Retirement:** once every blocker has merged into integration, the join carries no
-  unique content; the agent re-targets the PR to the integration branch
-  (`gh pr edit <n> --base <integrationBranch>`), updates `baseBranch`, and deletes the
-  join branch. The PR diff then shows only this task's own work.
-- A join branch is **infrastructure, never a PR** — it gets no PR of its own, is never
-  reviewed, and never targets `main`.
+  unique content — just delete it. There is no PR to re-target: the PR targeted
+  integration all along, and its diff shrinks to this task's own work by itself as each
+  blocker lands.
+- A join branch is **infrastructure**: no PR of its own, never reviewed, **never a merge
+  target**, never shared between tasks, never targets `main`.
+- **Repair rule (for runs that got this wrong).** A task PR based on a join → re-target
+  it to integration now. Work already **merged into** a join is stranded off integration
+  — a cycle defect: surface it in `attention` and the report, and recover it by
+  re-targeting the surviving branch, or (if the source branches were auto-deleted) with
+  ONE clearly-labelled recovery PR from the join to integration, identified as
+  `cycle-repair` with what went wrong. **Never open plumbing PRs as routine** — a PR with
+  no task behind it means the topology broke, and it should read as the incident it is.
 
 ### Model selection (by PHASE — analysis is always Opus; implementation by complexity)
 Spawned agents must NOT all inherit the orchestrator's Opus. The model is chosen by
@@ -653,9 +675,40 @@ and resumes when you re-run `/cadence:ship <plan-path>`.
 4. **Open the plan PR → `main` as a draft:** `gh pr create --base main --head
    cadence/<slug>-integration --draft`. Title: resolve via the **PR title convention**
    (`references/task-agent.md`; for this first PR, match the repo's house style).
-   Body: the cycle overview + the **cycle map table** (`| Task | What it does | PR |
-   Base |`), one row appended **once** when that task's PR opens — the canonical
-   answer to "which PR is which task" (see **Task ↔ PR identity**). Do NOT mirror PR
+   Body: the cycle overview + **the cycle plan diagram** + the **cycle map table**
+   (`| Task | What it does | PR | Base |`), one row appended **once** when that task's
+   PR opens — the canonical answer to "which PR is which task" (see **Task ↔ PR
+   identity**).
+
+   > **Every integration/plan PR carries the cycle plan as a Mermaid diagram.** The plan
+   > PR is where a human goes to understand the *shape* of the cycle, and a table of
+   > rows doesn't show dependencies. Render two small diagrams from the plan doc, in the
+   > body, above the map table:
+   > 1. **Waves + dependencies** — what runs in parallel and what waits on what:
+   >    ```mermaid
+   >    graph LR
+   >      subgraph W1[Wave 1]
+   >        T1["T1 · add reply matcher"]
+   >        T4["T4 · metrics dashboard"]
+   >      end
+   >      subgraph W2[Wave 2]
+   >        T2["T2 · wire inbound pipeline"]
+   >      end
+   >      T1 --> T2
+   >    ```
+   > 2. **Branch topology** — where each task's PR is based, so the stacking is visible:
+   >    ```mermaid
+   >    graph RL
+   >      main([main]); integ["integration"]
+   >      integ -. "this plan PR (merged LAST)" .-> main
+   >      T1["T1 #1206"] --> integ
+   >      T2["T2 #1207 (stacked)"] --> T1
+   >    ```
+   > Label every node with **task id + what it does + its PR number** once it exists —
+   > the same identity rule as everywhere else. Draw them **once**, from the plan; a
+   > diagram is structure, not status, so it does **not** get re-rendered as PRs move
+   > (GitHub already shows live status next to each referenced PR). Re-render only if
+   > the plan itself changes — a task added, dropped, or re-based. Do NOT mirror PR
    status / CI / merge state into the body and do NOT keep re-editing it: GitHub
    already renders the live status of referenced PRs, so re-writing the description on
    every change is wasted churn (and re-triggers noise). Also create the run's cycle
@@ -1067,6 +1120,9 @@ entry in `tasks/<id>.json.pendingDecisions`; and a review request to the human o
   already answered in this session — record the answer and move on.
 
 ## Plan-PR handling (top orchestrator; delegates the actual fixing)
+- **The plan PR body opens with the cycle plan diagrams** (waves + dependencies, and
+  branch topology) — see step 1.4. They are drawn once from the plan and only redrawn if
+  the plan itself changes; they show structure, not status.
 - **Add a task's row to the plan PR's cycle map once, when its PR first opens**
   (`| T-id | <plain-language what it does> | #<prNumber> | <base> |` — see **Task ↔ PR
   identity**). After that, leave the body alone — don't tick, restyle, or re-edit rows

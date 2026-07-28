@@ -91,15 +91,25 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
      ("this PR sits on a join of #A and #B; they conflicted in `x.ts`, resolved by …").
      If two blockers conflict in a way you cannot resolve on the merits, that's an
      **open decision** (below), not a silent guess.
-   - Record `joinBranch` and `baseBranch = <joinBranch>` in `tasks/<id>.json`, plus
-     `joinedShas` (the blocker head SHAs merged in) so you can tell later whether the
-     join is stale.
-   - A join branch is **infrastructure**: never open a PR for it, never review it,
-     never target `main` with it.
+   - Record `joinBranch` **and `baseBranch = <integrationBranch>`** in
+     `tasks/<id>.json`, plus `joinedShas` (the blocker head SHAs merged in) so you can
+     tell later whether the join is stale. **The join is where you branch FROM; it is
+     never your PR's base.**
+
+   > **NOTHING EVER MERGES INTO A JOIN.** A join merges nowhere, so a PR merged *into*
+   > one is stranded off integration — its source branch is auto-deleted, the work
+   > disappears from the cycle, and the exit gate runs without it. Your PR therefore
+   > targets **integration**, and if you ever find `baseRefName` pointing at a join,
+   > re-target it now (`gh pr edit <n> --base <integrationBranch>`), log
+   > `pr.retargeted`, and say so on the PR. Your join is **yours alone** — never build
+   > on, or point at, another task's join.
+   - A join branch is **infrastructure**: never open a PR for it, never review it, never
+     merge anything into it, never share it, never target `main` with it.
    - **Refresh it** whenever a blocker's branch advances (Monitor step 4), and
-     **retire it** once every blocker has merged into integration: re-target your PR
-     to the integration branch (`gh pr edit <n> --base <integrationBranch>`), update
-     `baseBranch`, drop `joinBranch`, and delete the join branch locally + remotely.
+     **retire it** once every blocker has merged into integration — just delete it,
+     locally and remotely, and drop `joinBranch`. There is nothing to re-target: your PR
+     was against integration all along, and its diff shrinks to your own work by itself
+     as each blocker lands.
 
    The branch name **must describe what the task does**, not just its id:
    ```
@@ -589,8 +599,12 @@ the task's own worktree; writes its own `tasks/<id>.json`. For this task's PR `<
    git diff origin/<baseBranch>...HEAD --name-only     # three dots: vs the merge base
    ```
    Every path must be one this task legitimately touches (its brief's touch set plus
-   anything the spec phase justified). Foreign files mean the sync went wrong — almost
-   always 4c resolved the wrong way. **Fix it and re-check; do not push a polluted diff
+   anything the spec phase justified) — **or a file belonging to an unmerged blocker you
+   are built on**, which is expected and must be **declared, not hidden**: your branch
+   sits on top of that blocker's work until it lands in integration. Report both numbers
+   in the body — *"Files changed: 34 — 8 this task's, 26 from #35 (not yet merged); they
+   leave this diff when #35 lands."* Anything in neither category means the sync went
+   wrong — almost always 4c resolved the wrong way. **Fix it and re-check; do not push a polluted diff
    and do not invite review onto one.** Record `filesChanged` + the verdict in
    `tasks/<id>.json`, and keep `Files changed: N` current in the PR body. If the diff is
    genuinely large *and* correct, say why in the body — an unexplained 40-file PR for a
