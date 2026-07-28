@@ -43,3 +43,10 @@ Run the full `cadence-planner` skill workflow on the resolved tasks:
 
 Then STOP at the plan and present the wave schedule + handoff instructions. Be
 conservative: when two tasks might conflict, serialize them.
+
+**Prep bundles.** Where several tasks are small and of the same class — `docs` (no
+behavior change), `config` (config/scaffold/deps/CI), or `schema` (migrations only) —
+propose them as ONE `prep(<class>)` task with a scope per item, scheduled early so it
+merges first. Never mix classes (a migration never rides with docs), cap it at ~5 scopes
+and ~15 files, keep every scope's requirement ids, and note that the scopes revert as a
+set. When in doubt, emit separate tasks.

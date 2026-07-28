@@ -172,6 +172,24 @@ advance. Every tick a **flow audit** classifies why each unfinished task isn't m
 and anything held up "waiting for a merge" is treated as a defect to fix on the spot —
 by building or refreshing a join, rebasing, or re-targeting the PR.
 
+**Prep bundle** — one task carrying several small, **same-class** scopes, so trivial work
+doesn't each cost a worktree, an Opus-tier spec agent, a PR, a CI run and one of your
+merge clicks. The planner proposes them; you see them in the plan doc before shipping.
+Classes never mix:
+
+| Class | Contains | Review bar |
+|---|---|---|
+| `docs` | documentation, comments, changelog, lint/formatting — **no behavior change** | light; the gate is enough |
+| `config` | config, scaffolding, dependency pins, CI tweaks — no product logic | normal |
+| `schema` | **migrations only**, bundled with each other → one revision chain instead of competing `down_revision`s | full; never skipped |
+
+Mixing classes would silently raise the whole PR to the riskiest item's level — a doc
+typo dragged through a careful review, or a migration slipped through a cursory one. So
+a migration never rides along with docs. Bundles are capped (~5 scopes, ~15 files), every
+scope keeps its own requirement ids, the PR carries **one labeled section per scope**
+(what/why/how-to-test/rollback), and it says plainly that the scopes **revert as a set**.
+They're scheduled early, so they merge first and give the rest of the cycle a clean base.
+
 **Open decision** — a question the run genuinely cannot settle from the code, the plan,
 or repo convention: product intent, a policy tradeoff, ambiguous acceptance criteria, an
 irreversible choice. Rather than burying a guess in the decision log, Cadence posts it on
@@ -971,6 +989,7 @@ it back to 180s on the next tick.
 | **Cycle report** | `<runDir>/report.md` — the run's evidence file; `/cadence:report` renders it any time |
 | **Base sync** | merging an advanced base into a task branch (never a rebase, never a force-push on an open PR) |
 | **Scope check** | `git diff origin/<base>...HEAD` after a sync must show only this task's files |
+| **Prep bundle** | one task holding several small same-class scopes (`docs` / `config` / `schema`), so trivial work costs one PR instead of five |
 | **Idle-gating** | acting on a task only when it has no agent in flight |
 | **Complexity** | `high / medium / low / trivial`; set by the spec phase; drives model + review depth |
 | **Change detection** | one batched read-only GraphQL snapshot per tick; no delta → no agent spawned |

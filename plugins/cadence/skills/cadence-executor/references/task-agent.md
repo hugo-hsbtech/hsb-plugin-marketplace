@@ -143,6 +143,16 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
      information only a human has — is not a decision-log line. Raise it as an
      **open decision** (next section), keep your provisional default, and keep
      building. Do not stop, and do not ship it silently.
+   - **If your task is a PREP BUNDLE** (its brief carries `Bundle class: <docs|config|
+     schema>` and a list of scopes `T<id>.<n>`): treat it as ONE task with several
+     scopes — one branch, one PR, one gate. Verify each scope's brief against the code
+     as usual; its `complexity` is the **highest** of its scopes, never an average. A
+     `schema` bundle is never `trivial` and **never skips the pre-push self-review**
+     (minimum `/code-review low`), however small each migration looks. If a scope turns
+     out not to belong — it changes behavior in a `docs` bundle, conflicts with another
+     scope, or is simply bigger than the plan thought — **don't silently absorb it**:
+     implement the rest, and report the misfit scope in your return summary so it can be
+     re-planned as its own task. That is a finding, not a failure.
    - **Determine this task's `complexity`** (`high|medium|low|trivial`, from the
      verified touch set + shared surfaces) and write it to `tasks/<id>.json` — the
      orchestrator reads it to pick the Implement model, and the Implement phase
@@ -725,6 +735,12 @@ multi-section description.
   [answer here](<commentUrl>)`, struck through once resolved with the answer and the
   SHA. This is the **only** part of the body you keep updating; everything else is
   written once. No open decisions → omit the section entirely.
+- **A prep bundle gets one labeled section per scope.** `### Scope 2 of 4 — <what>
+  (T0.2)`, each with its own what/why, how-to-test, and roll-back line — so a reviewer
+  can read, test, and judge each scope independently inside one PR. State once, near the
+  top: *"These N scopes revert as a set — say so before merge if any needs to be
+  independently revertible."* Never merge the scopes into one undifferentiated
+  narrative; that's the thing that makes a multi-scope PR unreviewable.
 - **State the stacking in words, not in the draft flag.** The header's `base` token
   says it in plain language: `Stacked on #123 (adds the matcher) — merge after it`, or
   `Sits on a join of #123 + #124`. A reviewer must be able to tell what they're looking

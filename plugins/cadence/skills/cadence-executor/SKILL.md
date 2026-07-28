@@ -152,13 +152,24 @@ what the task does.)
   `cadence/<slug>-t<id>-<task-slug>`, where `<task-slug>` is a 2–5-word kebab-case summary
   of what the task actually does (derived from its title/goal during the Spec phase).
   A bare `cadence/<slug>-t<id>` that doesn't say what the PR does is not acceptable.
-- **One PR per task — the default, always.** Each task ships on its own branch in
-  its own worktree and opens its **own** PR. Never combine multiple tasks' changes
-  into a single shared branch or PR. The only exception: a task whose change is so
-  trivial it isn't worth a standalone PR (e.g. a one-line tweak) — it may be folded
-  into a closely-related task's PR, but only with its own clearly-labeled section
-  (task id, what/why, decision log) in that PR body, and the fold noted in state.
-  When unsure, open a separate PR.
+- **One PR per task — always, with no exceptions.** Each task ships on its own branch
+  in its own worktree and opens its **own** PR. Never combine two tasks' changes into a
+  shared branch or PR, and never fold a small task into a sibling's PR — a task agent
+  may not touch another task's branch or PR at all, so that "fold" was never actually
+  possible.
+  **Batching small work is a PLAN-time decision, not a dispatch-time one.** The planner
+  emits a **prep bundle** — one task carrying several same-class scopes (`docs` /
+  `config` / `schema`, never mixed), capped at ~5 scopes, with a union touch set. To the
+  executor a bundle is simply *one task*: one branch, one PR, one agent. Handle it like
+  any other task, with three adjustments:
+  - its `complexity` is that of its **highest** scope (a `schema` bundle is never
+    `trivial`, whatever the file count suggests);
+  - a **`schema` bundle never skips the pre-push self-review** — minimum
+    `/code-review low`, even if each migration looks small;
+  - its PR body carries **one clearly-labeled section per scope** (`### Scope 2 of 4 —
+    <what> (R-ids)`) with that scope's what/why, how-to-test, and roll-back note, plus
+    one line stating the scopes **revert as a set**. The scope check runs against the
+    **union** touch set.
 - **Preflight gate before any work.** The **superpowers plugin must be installed**,
   `gh` must be authenticated as the correct user, AND every required MCP server must
   be connected — verified and recorded in state *before* a single task is

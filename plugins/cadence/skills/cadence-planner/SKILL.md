@@ -180,6 +180,58 @@ Detect cycles. If a cycle exists, flag it explicitly — it means the tasks are
 mutually entangled and should be merged into one task or manually split. Do not
 silently break it.
 
+### 3b. Bundle pass — fold trivial prep work into ONE task per class
+Per-task overhead is fixed and mostly independent of the change: a worktree, an
+Opus-tier spec agent, a PR, a CI run, a review round-trip, and one of the human's merge
+clicks. Spending all of that on a doc typo is waste, and eight trivial PRs spend the
+human's scarcest resource — attention — eight times. A **prep bundle** is one task
+carrying several small, same-class scopes, scheduled early so it merges first and gives
+every other task a clean base.
+
+**Bundling is a PLAN-TIME decision.** The executor never folds one task into another's
+PR — it can't (a task agent may not touch a sibling's branch). A bundle only exists if
+you emit it as a task here, with a **union touch set**.
+
+**Classes — never mix them in one bundle:**
+
+| Class | Contains | Review bar |
+|---|---|---|
+| `docs` | documentation, comments, README/changelog, lint/formatting — **no behavior change whatsoever** | light; the gate is enough |
+| `config` | config files, scaffolding, dependency pins, CI/workflow tweaks — no product logic | normal |
+| `schema` | **migrations only** — bundled *with each other*, giving one revision chain instead of competing `down_revision`s | full; never light |
+
+Mixing classes silently raises the whole PR to the riskiest item's level: a doc typo
+drags through a careful review, or a migration slides through a cursory one. **A
+migration never joins a `docs` bundle.**
+
+**An item is eligible only if ALL hold:**
+1. **Small and low-risk on inspection** — a candidacy judgement, not a complexity
+   assignment. (`complexity` remains the executor spec phase's call, for the bundle as a
+   whole; a bundle inherits its **highest** scope's complexity.)
+2. **Same class** as the rest of the bundle.
+3. **No write-write conflict** among the bundled items, and the union creates no new
+   conflict with another task.
+4. **Its dependents can live with bundle-granularity.** If another task depends on item
+   A, that edge is re-pointed to the whole bundle. Only bundle A if the bundle is small
+   and lands in an early wave — never make half the cycle wait behind a bundle carrying
+   something debatable.
+5. **Caps:** ≤ 5 scopes and ≤ ~15 files per bundle. Beyond that, emit a second bundle of
+   the same class rather than one unreviewable PR.
+
+**Emitting one:**
+- Give it a normal task id, titled `prep(<class>): <plain summary>` (e.g.
+  `prep(docs): 4 doc + comment fixes`), and schedule it in the **earliest wave it
+  qualifies for** so it merges first.
+- List every scope as `T<id>.<n>` with its own one-line what/why and **its own R-ids** —
+  the requirement ledger must still balance (`0 unaccounted`); a bundle must never
+  swallow a requirement's traceability.
+- Record `Bundle: <class>` plus the per-scope breakdown in the task's context brief, and
+  note the union touch set.
+- **Say it's reversible as a set.** One revert takes all the scopes with it — call that
+  out so the human can ask for a split before shipping.
+- **When in doubt, don't bundle.** A separate PR is always a legitimate outcome; a
+  confusing multi-scope PR is not.
+
 ### 4. Schedule into waves (topological levelling)
 - Wave 1 = all tasks with in-degree 0 (no unmet deps).
 - Remove them; recompute; the next in-degree-0 set is Wave 2; repeat.
@@ -238,6 +290,7 @@ WAVES
   Wave 2 ║ parallel-safe ║ T2 (needs T1), T4
   Wave 3 ║               ║ T6 (needs T2,T4)
 CRITICAL PATH   T1 → T2 → T6   (3 cycles minimum)
+PREP BUNDLES    prep(<class>) tasks folding trivial same-class work into one PR (or "none")
 PER-TASK BRIEF  touch set + REQUIREMENTS COVERED (R-ids w/ anchors) + acceptance criteria
 NOT DOING       scope boundary — excluded/deferred requirements + reason each
 LEDGER          N inventoried · N assigned · N deferred · 0 unaccounted
@@ -252,6 +305,11 @@ HANDOFF         "Dispatch tasks as their base branches appear and FLOW — don't
 ## Guardrails
 - **Plan only.** Never start implementing tasks or dispatch worker agents. The
   deliverable is the schedule.
+- **Bundle conservatively, and never across classes.** A prep bundle exists to spare
+  the human eight merge clicks on trivial work — not to shrink the PR count. Same class
+  only (`docs` / `config` / `schema`), ≤5 scopes, ≤~15 files, no write-write conflicts,
+  every scope keeping its own R-ids. A migration never rides along with docs. When in
+  doubt, emit separate tasks.
 - **Be conservative on conflicts.** When unsure whether two tasks conflict,
   serialize them. A wasted serial cycle is cheaper than two agents fighting over a
   file and producing a broken merge.

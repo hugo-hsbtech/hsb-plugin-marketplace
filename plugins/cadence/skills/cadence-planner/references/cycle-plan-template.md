@@ -19,11 +19,12 @@
 
 ## 1. Tasks
 
-| ID | Title | Source ref | Stated deps | Analysis confidence |
+| ID | Title | Source ref | Stated deps | Bundle | Analysis confidence |
 |----|-------|------------|-------------|---------------------|
-| T1 | …     | ABC-123   | —           | high                |
-| T2 | …     | ABC-124   | T1          | high                |
-| T3 | …     | freetext   | —           | low (clarify scope) |
+| T0 | prep(docs): 4 doc + comment fixes | ABC-120,121 | — | `docs` (4 scopes) | high |
+| T1 | …     | ABC-123   | —           | —      | high                |
+| T2 | …     | ABC-124   | T1          | —      | high                |
+| T3 | …     | freetext   | —           | —      | low (clarify scope) |
 
 ## 2. Dependency graph
 
@@ -83,10 +84,31 @@ task in the previous wave has merged green.
 - **Blocks:** T2, T4
 - **Notes:** <gotchas, conventions, relevant CLAUDE.md skill to invoke>
 
+### T0 — prep(docs): 4 doc + comment fixes   ← a PREP BUNDLE
+- **Bundle class:** `docs` — no behavior change in any scope. (Classes never mix:
+  `docs` / `config` / `schema`; a migration never rides with docs.)
+- **Goal / done:** all four scopes land together in one PR, merged first so the rest of
+  the cycle branches off a clean base.
+- **Reverts as a set:** one revert takes all four scopes with it. Ask for a split before
+  shipping if any scope needs to be independently revertible.
+- **Scopes** (each keeps its own R-ids — the ledger must still balance):
+  - **T0.1** — <what & why, one line> _(anchor)_ · files: `<paths>`
+  - **T0.2** — <what & why> _(anchor)_ · files: `<paths>`
+  - **T0.3** — <what & why> _(anchor)_ · files: `<paths>`
+  - **T0.4** — <what & why> _(anchor)_ · files: `<paths>`
+- **Union touch set — creates:** <paths> · **edits:** <paths> · **reads:** <paths>
+- **Shared surfaces touched:** <none, ideally — a bundle that touches a shared surface
+  usually shouldn't be a bundle>
+- **Blocks:** <tasks whose edges were re-pointed from an individual scope to this bundle>
+- **Notes:** ≤5 scopes, ≤~15 files. The executor's spec phase decides the bundle's
+  `complexity` as a whole (it inherits the **highest** scope's).
+
 _(repeat per task)_
 
 > Every R-id inventoried at ingestion appears in exactly one brief's "Requirements
-> covered" above, or in §6 below. The header ledger must show `0 unaccounted`.
+> covered" above (for a prep bundle: under exactly one of its scopes), or in §6 below.
+> The header ledger must show `0 unaccounted` — bundling must never swallow a
+> requirement's traceability.
 
 ## 5. Conflicts & serialization notes
 
