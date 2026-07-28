@@ -86,6 +86,14 @@ Keep `detail` to one sentence. Never log secrets, tokens, or file contents.
 
 ## 2. Render the report
 
+**Where it lands, and how the user learns about it:** `<runDir>/report.md`, inside the
+target repo's gitignored `.cadence/`. The path is announced in full at run open, carried
+as a one-line footer on **every** turn, printed whenever the file is written or
+refreshed, and led with in the final summary. When the cycle finishes, that's also the
+one moment worth a desktop notification (`PushNotification`, if available):
+`"cycle <slug> complete: N PRs merged · report at <path>"`. The user should never have to
+ask where the report is, or discover it only by looking.
+
 **When:**
 - **Always** at the end condition (plan PR merged, or the run abandoned) — write
   `report.md` *before* the final summary, and print its path.

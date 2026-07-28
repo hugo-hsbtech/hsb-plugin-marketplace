@@ -605,6 +605,35 @@ Two rules keep it useful: **every claim anchors to a PR, comment URL, SHA, or ti
 the run**. An empty "what went wrong" after a messy cycle is a broken report, not a clean
 one. The file lives under `.cadence/`, which is gitignored — it's yours, not the repo's.
 
+### Where the files are, and when you'll hear about it
+
+You never have to hunt for any of it:
+
+- **At run open**, Cadence prints the lot once — the run directory (absolute), the plan
+  doc, the integration branch and plan PR, the cycle label, and the report path.
+- **Every turn afterwards** carries a one-line footer:
+  ```
+  Run: /path/to/repo/.cadence/cycles/20260706-1200-a1b2c3-<slug>-cycle · report: …/report.md (/cadence:report to refresh) · plan: docs/plans/proposed/… · integration: cadence/<slug>-integration (plan PR #1200)
+  ```
+  It says the report path even before the file exists — so you know it's one command
+  away rather than something that only appears at the end.
+- **Whenever the report is written or refreshed**, the path is printed again, and the
+  final summary *leads* with it.
+
+**Notifications are deliberately rare.** If your session has desktop/phone notifications
+available, Cadence sends **at most one per turn**, and only when something genuinely
+warrants pulling you back:
+
+| Notified | Not notified |
+|---|---|
+| the cycle finished (with the report path) | a PR opened |
+| a **new** blocking decision needs your answer | CI went green |
+| the plan PR is ready for your merge | a review was answered |
+| a task failed | a base was synced, a quiet tick passed |
+
+Each item notifies **once, on the transition** — a decision that's been waiting since
+yesterday doesn't ping you every 30 minutes; it just stays in the "needs you" list.
+
 ### Closing the loop: the report is how Cadence evolves
 
 The report isn't just a post-mortem for your team — it's the input that improves the

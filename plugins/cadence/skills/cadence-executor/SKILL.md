@@ -253,6 +253,29 @@ task files, never from memory or optimism:
    Never end a turn where a decision is waiting on the user without printing it here:
    an open decision that only lives inside a PR comment is exactly the failure this
    list exists to prevent.
+3. **A "where things live" footer — one line, every turn.** The user must never have to
+   hunt for the run's files or ask where the report is:
+   ```
+   Run: <absolute runDir> · report: <runDir>/report.md (`/cadence:report` to refresh) ·
+   plan: <planPath> · integration: <integrationBranch> (plan PR #<n>)
+   ```
+   Print the report line whether or not the file exists yet — say `not written yet
+   (/cadence:report renders it any time)` when it doesn't, so the user knows it's
+   available on demand rather than only at the end.
+4. **Notify — but only when it's worth interrupting for.** This loop runs for days; the
+   user has almost certainly walked away. If a `PushNotification` tool is available,
+   send **at most one per turn**, and only for:
+   - **the cycle finishing** — "cycle <slug> complete: N PRs merged · report at
+     <runDir>/report.md";
+   - **something new that blocks progress and only the user can clear** — a blocking
+     open decision just raised, the plan PR now ready for their merge, or a task marked
+     `failed`. Notify on the **transition** (the item entering `attention`), never again
+     on later ticks while it sits there.
+
+   **Never notify** for routine progress — a PR opened, CI going green, a review
+   answered, a base sync, a quiet tick. A notification the user didn't need costs more
+   than the one it was bundled with saved. When there's nothing new in `attention` and
+   the cycle isn't done, send nothing.
 
 ## Inputs
 - A cycle plan: a path to a cycle-plan markdown produced by `/cadence:plan` — named
@@ -611,7 +634,12 @@ and resumes when you re-run `/cadence:ship <plan-path>`.
    title you used.
    This PR stays a **draft** until every task has merged into integration (step 3
    un-drafts it), and the **human** merges it last.
-5. Compute the first dispatch set = tasks whose **base is available**. Initially that
+5. **Tell the user where everything lives — once, at run open.** Print the run dir
+   (absolute), the plan doc, the integration branch + plan PR URL, the cycle label, and
+   that `<runDir>/report.md` is the evidence report, renderable any time with
+   `/cadence:report`. This is the only time it's spelled out in full; after that it's
+   the one-line footer on every turn.
+6. Compute the first dispatch set = tasks whose **base is available**. Initially that
    is every task with **no blockers** (base = integration, which now exists), plus any
    **single-blocker** task whose blocker's branch already exists, plus any
    **multi-blocker** task all of whose blockers' branches exist (it builds its join).
@@ -724,7 +752,8 @@ After the tick's per-task agents return, the top orchestrator does only bookkeep
 - **End condition:** only when the **plan PR is merged into `main`** AND every task
   is `done`/`failed` — remove the integration worktree/branch, **render
   `<runDir>/report.md`** from the event logs (see Evidence capture), write the final
-  summary with the report's path, and **omit ScheduleWakeup**. The run is complete.
+  summary **leading with the report's absolute path**, send the one completion
+  notification, and **omit ScheduleWakeup**. The run is complete.
 
 ## Per-task orchestrator agent (summary — full playbook in references/task-agent.md)
 The top orchestrator spawns this agent for an **idle** task with work. It reads
@@ -778,9 +807,14 @@ detected → clean again), **what needed you** (with how long each thing waited)
 went wrong** (Cadence's own failures included), flow health, cost, timeline, follow-ups,
 and a copy-pasteable *Feedback for the Cadence maintainer* section.
 
-- **Write it at the end condition, before the final summary**, and print its path.
+- **Write it at the end condition, before the final summary**, and print its **absolute
+  path** — first line of the summary, not buried at the bottom.
 - **Render it on demand** whenever the user asks how the cycle went (or runs
-  `/cadence:report`), marked `IN FLIGHT`.
+  `/cadence:report`), marked `IN FLIGHT`. Say the path every time you write or refresh
+  it — "written to <path>", never just "the report is ready".
+- **Its location is never a mystery:** announced in full at run open, then carried as a
+  one-line footer on every turn (see the Turn-end invariant), so the user never has to
+  ask where it is or dig through `.cadence/`.
 - **Never fabricate a metric** — an event that wasn't logged is `not captured`, never
   estimated. And never soften the failure sections: a report whose "what went wrong" is
   empty after a run with re-drafts, stalls, or parked reviewers is a broken report.

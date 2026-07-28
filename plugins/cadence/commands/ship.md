@@ -96,13 +96,20 @@ the per-task playbook.
    and every guard holds (approval intact and not stale, no open decision, all comments
    answered, CI green, mergeable clean), it merges its own PR into its base, posting
    the authorization first. On merge it cleans up and retires.
-5. **A question you can't settle becomes an open decision, not a buried default.** Post
+5. **Says where everything is, and pings you only when it matters.** Announce the run
+   dir, plan doc, integration branch + plan PR, and the report path once at run open,
+   then carry a one-line footer on every turn (`Run: … · report: … (/cadence:report)`).
+   If a `PushNotification` tool is available, send **at most one per turn** and only on
+   a transition worth interrupting for — the cycle finishing (with the report path), a
+   new blocking decision, the plan PR ready for the user's merge, or a failed task.
+   Never for routine progress (a PR opened, CI green, a base sync, a quiet tick).
+6. **A question you can't settle becomes an open decision, not a buried default.** Post
    it on the PR as a numbered `D<n>` comment with real options, the provisional default
    and an answer protocol; pin it at the top of the PR body; track it in the task file;
    keep the PR draft while it's blocking; and repeat it in **every** turn summary's
    "needs you" list with its link. Never ship a pending question silently, and never
    turn it into a blocking prompt to the user.
-6. Re-arm the **adaptive ScheduleWakeup loop** each turn — 180s while hot (agents in
+7. Re-arm the **adaptive ScheduleWakeup loop** each turn — 180s while hot (agents in
    flight or changes detected), doubling per quiet tick up to `maxSeconds`
    (default 1800) while everything is parked on humans; any activity snaps it back
    to 180s. Dispatch tasks as their base branches appear (no merge gate). End the

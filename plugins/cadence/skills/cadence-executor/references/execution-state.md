@@ -103,6 +103,9 @@ must never be committed onto a feature branch).
       "note": "T3 failed its gate; T4 cannot build its join" }
   ],
   "unresolvedDecisions": [],
+  "reportPath": ".cadence/cycles/20260625-1430-a1b2c3-matchmaking-followups-cycle/report.md",
+  "notified": ["decision:T2:D1", "plan-pr-ready"],
+  "//notified": "Keys of attention items already pushed as a notification. Notify on the TRANSITION (item entering attention) and never again while it sits there — one notification per turn, max, and never for routine progress.",
   "modelPolicy": {
     "spec":    { "model": "opus",   "effort": "high" },
     "high":    { "model": "opus",   "effort": "medium" },
@@ -270,6 +273,10 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
   passes (human approver, approval not superseded, head unchanged in substance since
   `approvedSha`, no unresolved decision, all comments answered, CI green, mergeable
   clean). The **plan PR → `main` is never auto-merged** under any setting.
+- `reportPath` / `notified` — where the cycle report is written (announced at run open,
+  echoed in every turn's footer, refreshed on demand by `/cadence:report`), and which
+  `attention` items have already triggered a desktop notification so a pending item is
+  never re-notified tick after tick.
 - `attention` — orchestrator-owned, rebuilt every tick by reading the task files: the
   list of things that actually need the human, each with a link where they act (open
   decisions, parked review loops, failed tasks, PRs awaiting review >24h, the plan PR
