@@ -337,6 +337,27 @@ reconstructable, so never blindly create a new one):**
 Always reuse the located dir for the whole run — a second state dir for an existing
 run would fork the monitor and duplicate PRs.
 
+**4. Pin the policy — an upgrade must never change the rules under a live run.**
+Monitoring spans days, and `/cadence:ship` re-enters by re-reading *these files*. If the
+plugin is upgraded mid-run, the re-entering orchestrator would silently adopt the new
+behaviour — so a run whose human was told "merges are human-only" could start merging.
+That is a promise broken by a version bump, and it is not allowed.
+- **On a fresh run:** write `policyVersion` (the installed version) and an explicit
+  `approvalMergePolicy` into `run.json`, and state the merge policy in the run-open
+  announcement so it's auditable later.
+- **On resume with no `approvalMergePolicy`:** the run predates the feature → set it to
+  **`"off"` (human-only)**, log `policy.pinned`, and say so once. Never infer the new
+  default into an old run.
+- **On resume where the installed version ≠ `policyVersion`:** note the skew **once** —
+  "run opened under 3.2.1, plugin now 3.7.0 — merge policy stays as it started; say
+  'adopt the new policy' to change it" — and keep behaving as the run started.
+- **Only the user changes it mid-run**, explicitly; then update both fields and record
+  the authorization.
+
+Pinned: **merge policy, draft/readiness semantics, `main` safety** — the promises a human
+acts on. Everything mechanical (better conflict detection, cheaper ticks, richer reports)
+applies immediately, because it changes nothing the user was told.
+
 ## Two-level architecture (who does what)
 This skill runs as a **thin top orchestrator** that delegates each task to its own
 **per-task orchestrator agent**. The top orchestrator does NOT implement, monitor,
@@ -645,10 +666,14 @@ and resumes when you re-run `/cadence:ship <plan-path>`.
    title you used.
    This PR stays a **draft** until every task has merged into integration (step 3
    un-drafts it), and the **human** merges it last.
-5. **Tell the user where everything lives — once, at run open.** Print the run dir
-   (absolute), the plan doc, the integration branch + plan PR URL, the cycle label, and
-   that `<runDir>/report.md` is the evidence report, renderable any time with
-   `/cadence:report`. This is the only time it's spelled out in full; after that it's
+5. **Tell the user where everything lives — and what the merge policy is — once, at run
+   open.** Print the run dir (absolute), the plan doc, the integration branch + plan PR
+   URL, the cycle label, `<runDir>/report.md` (renderable any time with
+   `/cadence:report`), and **one explicit line on who merges what** — e.g. "task PRs
+   merge automatically once you approve them and every guard holds; the plan PR into
+   `main` is always yours" (or "merges are human-only" when
+   `approvalMergePolicy: "off"`). That line is a promise for the life of the run: it is
+   pinned in `run.json` and an upgrade will not rewrite it. This is the only time it's spelled out in full; after that it's
    the one-line footer on every turn.
 6. Compute the first dispatch set = tasks whose **base is available**. Initially that
    is every task with **no blockers** (base = integration, which now exists), plus any
@@ -945,8 +970,11 @@ for a 3-file task is a defect, not a big task.
 it.** Waiting for them to also click the button just parks finished work. So the
 task's own agent merges it — *if and only if* every guard below holds **in the same
 monitor tick that merges**, verified from that tick's GraphQL payload and the local
-git state. Default `run.json.approvalMergePolicy = "auto"`; set it to `"off"` to
-require the human's click (record the choice when the user asks for it).
+git state. **Read `run.json.approvalMergePolicy` — never the default in this file.** It
+is pinned at run open: `"auto"` for runs opened under a version that has this feature,
+`"off"` for any run that predates it or whose user asked for the click. A run that began
+under a human-only policy stays human-only until *the user* says otherwise, no matter
+what version is installed now (see Pin the policy). Record the choice when they do.
 
 | # | Guard | Fails if… |
 |---|---|---|

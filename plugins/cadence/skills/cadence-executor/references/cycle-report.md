@@ -50,6 +50,7 @@ event the moment it happens, not at the end:
 
 | Kind | Logged when | Feeds the report's… |
 |---|---|---|
+| `policy.pinned` | the run's merge policy is pinned or a version skew is detected (`policyVersion`, installed version, resulting policy) | header, **what went wrong** |
 | `run.preflight` | preflight passes/fails (record which checks, and `graphify` ok/absent) | header, cost |
 | `state.changed` | any task `status` transition (`from` → `to`, trigger) | per-task ledger, timeline |
 | `snapshot.delta` | the orchestrator sees PR fields change (`fields`, `old`→`new`) | per-task ledger, review/CI health |
@@ -119,6 +120,8 @@ had three re-drafts and a parked review loop is a broken report.
 **Status:** COMPLETE | IN FLIGHT | ABANDONED · **Plan:** <planPath> · **Repo:** <owner/repo>
 **Started:** <createdAt> · **Ended:** <ts or "—"> · **Wall clock:** <Xd Yh>
 **Plan PR:** #<n> (<state>) · **Label:** `cadence:<slug>` · **Run dir:** <runDir>
+**Opened under:** cadence <policyVersion> · **Merge policy:** <auto | human-only>
+<if the installed version differs, say so here — the run kept its original policy>
 
 ## Outcome
 

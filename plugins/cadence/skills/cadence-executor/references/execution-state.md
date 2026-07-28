@@ -88,6 +88,8 @@ must never be committed onto a feature branch).
     "cadence/matchmaking-followups-t1-add-reply-correlation-matcher": "9f1c2ab…"
   },
   "//refSnapshot": "Head OID of the integration branch and every task/join branch. A moved ref is a delta for EVERY PR based on it — this is how a merge the human just made wakes up its dependents, since their own PR fields don't change when their base moves.",
+  "policyVersion": "3.7.0",
+  "//policyVersion": "The cadence version this run was OPENED under. Behaviour that the user was told about at run open — merge policy above all — is pinned to it. If the installed plugin is newer, note the skew ONCE in the turn summary and keep behaving as the run started; only the user can opt an in-flight run into new policy.",
   "approvalMergePolicy": "auto",
   "//approvalMergePolicy": "'auto' (default) = a task PR with an INTACT human approval is merged by its own agent once every guard passes (Approval-authorized auto-merge). 'off' = the human always clicks merge. The plan PR → main is NEVER auto-merged under either setting.",
   "mergeAuthorization": null,
@@ -268,7 +270,25 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
   Re-baselined right after that task's agent completes, so the agent's own
   replies/pushes don't read as news next tick. Detection only — the orchestrator
   never triages or acts on PR content.
-- `approvalMergePolicy` — `"auto"` (default) or `"off"`. Under `"auto"`, a task PR
+- `policyVersion` / `approvalMergePolicy` — **written explicitly at run open and then
+  pinned.** `approvalMergePolicy` is never left absent, because absence is how a policy
+  silently changes under a live run: an upgrade lands mid-flight, the re-entering
+  `/cadence:ship` reads the *new* skill's default, and a run whose human was promised
+  "merges are human-only" starts merging. So:
+  - **A run.json with NO `approvalMergePolicy` predates the feature → treat it as
+    `"off"` (human-only)**, write that value in, log a `policy.pinned` event, and say so
+    once in the turn summary. Never infer the new default into an old run.
+  - **If the installed version ≠ `policyVersion`**, note the skew once
+    ("run opened under 3.2.1, plugin now 3.7.0 — merge policy stays as it started; say
+    'adopt the new policy' to change it") and keep behaving as the run started.
+  - **Only the user can change it mid-run**, explicitly. Then update both fields and log
+    the authorization.
+
+  This pinning covers the promises a human relies on: **merge policy, draft/readiness
+  semantics, and `main` safety**. Mechanical improvements (better conflict detection,
+  cheaper ticks, richer reports) always apply immediately — they change nothing the user
+  was told.
+- `approvalMergePolicy` — `"auto"` (default **for new runs**) or `"off"`. Under `"auto"`, a task PR
   carrying an **intact human approval** is merged by its own agent once every guard
   passes (human approver, approval not superseded, head unchanged in substance since
   `approvedSha`, no unresolved decision, all comments answered, CI green, mergeable
@@ -374,7 +394,11 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
 
 ## Resume logic (each wakeup — top orchestrator)
 0. **Locate** the run dir (glob `*-<slug>-cycle/run.json`, match `planPath`) — never
-   create a duplicate. Read `run.json` + every `tasks/<id>.json`.
+   create a duplicate. Read `run.json` + every `tasks/<id>.json`. **Then check the policy
+   pin:** no `approvalMergePolicy` → the run predates the feature → set it to `"off"`
+   (human-only) and say so once; `policyVersion` ≠ the installed version → note the skew
+   once and keep the run's original behaviour. An upgrade never rewrites what this run's
+   human was told at its start.
 1. Re-verify the preflight gate **only if this tick will dispatch NEW spec/implement
    work** (auth/MCP can drop between sessions); a pure monitor tick skips the pings.
 2. **Change detection:** ONE batched read-only GraphQL call over all the cycle's open

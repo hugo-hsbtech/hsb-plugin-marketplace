@@ -917,6 +917,16 @@ and only while that approval still stands and still describes the code (see
 merged for you**, under any setting. Prefer clicking every button yourself? Set
 `approvalMergePolicy: "off"`.
 
+**I upgraded Cadence mid-run — did the rules change under my cycle?** No. A run pins its
+policy at open: `run.json` records the version it started under and an explicit merge
+policy, and a re-entering `/cadence:ship` honours *that*, not whatever the newly-installed
+version defaults to. A cycle that began under "merges are human-only" stays human-only
+until **you** say otherwise — you'll see a one-line note about the version skew, and can
+opt in with "adopt the new policy". What *does* apply immediately is everything
+mechanical — better conflict detection, cheaper ticks, richer reports — because none of
+it changes something you were told. If you're ever unsure which policy a run is on, the
+run-open announcement stated it, and `run.json.approvalMergePolicy` is the answer.
+
 **I approved a PR, then it pushed a commit — will it still merge?** Only if that commit
 was a base-sync merge or a comment/doc/formatting-only edit. Any change to logic, tests,
 config, dependencies, migrations, or CI makes your approval **stale**: it won't merge,
