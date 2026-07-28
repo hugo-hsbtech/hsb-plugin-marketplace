@@ -32,9 +32,32 @@ Fields: `ts` (ISO-8601, UTC), `actor` (`orchestrator` or the task id), `kind`, `
 **Event kinds to log** — the left column is what the report is built from, so log the
 event the moment it happens, not at the end:
 
+> ### THE STATE FILES ARE CURRENT VALUES; THE EVENT LOG IS THE LEDGER
+> `run.json` and `tasks/<id>.json` are overwritten in place — they answer "what is true
+> now", never "what happened". So **every mutation of task state must emit its event in
+> the same breath**, or the history is gone for good:
+> - a task's `status` changes → `state.changed` (`from`, `to`, what caused it);
+> - the orchestrator observes a PR snapshot field change → `snapshot.delta` (which
+>   fields, `old` → `new`) — this is the ledger of everything that happened *to* a PR:
+>   reviews appearing, CI flipping, draft state, mergeability, head SHA;
+> - a base ref moves → `base.moved` (`ref`, `old` → `new` oid, which tasks depend on it);
+> - a PR is re-targeted, synced, or scope-checked → `pr.retargeted` / `basesync` /
+>   `scope.checked`.
+>
+> Rule of thumb: **if you wrote a field, you owe an event.** A report that can't show
+> when a PR became conflicted and when it was fixed is missing the exact evidence the
+> reader needs.
+
 | Kind | Logged when | Feeds the report's… |
 |---|---|---|
 | `run.preflight` | preflight passes/fails (record which checks, and `graphify` ok/absent) | header, cost |
+| `state.changed` | any task `status` transition (`from` → `to`, trigger) | per-task ledger, timeline |
+| `snapshot.delta` | the orchestrator sees PR fields change (`fields`, `old`→`new`) | per-task ledger, review/CI health |
+| `base.moved` | a base ref's head OID changes (which dependents it affects) | flow health, conflict latency |
+| `basesync` | a base is merged into a task branch (`method`: update-branch \| local merge) | flow health |
+| `conflict` / `conflict.resolved` | a sync conflicts; how it was resolved (base-favoured hunks) | **what went wrong** |
+| `pr.retargeted` | the PR's base changes — by you, or silently by GitHub after a branch delete | flow health |
+| `scope.checked` / `scope.polluted` | the post-sync diff-vs-base check (`filesChanged`, foreign paths) | **what went wrong** |
 | `task.spawn` | an agent is spawned (`agentKind`, `model`, effort) | cost, timeline |
 | `task.complexity` | the spec phase decides `complexity` (+ whether it fused) | per-task, cost |
 | `join.built` / `join.refreshed` / `join.retired` | a join branch is created, re-merged, or retired | flow health |
@@ -47,7 +70,6 @@ event the moment it happens, not at the end:
 | `comment.answered` | a comment is judged + replied (verdict, `replyUrl`) | review health |
 | `ci.red` / `ci.green` | CI flips (which checks failed) | **what went wrong** |
 | `fix.pushed` | a fix commit is pushed (`sha`, what it fixed) | timeline |
-| `rebase` / `conflict` | a rebase or a conflict resolution | flow health |
 | `guard.blocked` | an auto-merge guard held the merge back (which guard, why) | merge health |
 | `automerge` | the agent merged under an approval (`authorizedBy`, `approvedSha`→`mergedSha`, `headDelta`) | outcome |
 | `merged` | the PR merged (by whom) | outcome |
@@ -109,6 +131,30 @@ in the way. No spin — if half the tasks stalled, that's the sentence.>
 | T1 | Add the reply-correlation matcher | #1206 | medium | merged (auto, approved by @you) | 22m | 3h 10m | 2 rounds w/ bot | — |
 | T2 | Wire it into the inbound pipeline | #1207 | high | merged (by you) | 41m | 1d 2h | 1 human | D1 (4h to answer) |
 
+## Per-task ledger
+
+> One block per task: everything that happened to it and to its PR, in order, from the
+> event log. This is the "what changed, and when" record — state files only ever show
+> the final value, so this is the only place the history exists.
+
+<details><summary><b>T2 · Wire the matcher into the inbound pipeline · #1207</b></summary>
+
+| When | What changed | Detail | Evidence |
+|---|---|---|---|
+| <ts> | status `pending → specifying` | spec agent spawned (opus/high) | — |
+| <ts> | complexity = `high` | 4 files in touch set | — |
+| <ts> | status `implementing → open` | PR opened as draft | #1207 |
+| <ts> | `isDraft true → false` | readiness checklist passed | <comment url> |
+| <ts> | base `t1-branch → integration` | GitHub re-targeted it — #1206 merged, branch deleted | #1207 |
+| <ts> | `mergeStateStatus CLEAN → DIRTY` | base moved: #1206 squash-merged into integration | <base.moved ts> |
+| <ts> | conflict resolved, synced | merged base in; 3 hunks taken from base (stale copies of #1206) | <sha>, <comment url> |
+| <ts> | scope check | 4 files changed — matches touch set | — |
+| <ts> | `reviewDecision → APPROVED` | @you | <review url> |
+| <ts> | status `open → merged` | auto-merged on your approval | <sha> |
+
+**Conflict latency:** base moved <ts> → detected <ts> (<n>m) → clean again <ts> (<n>m).
+</details>
+
 ## What needed you
 
 > Every item a human had to resolve, with how long it waited. This is the section that
@@ -147,7 +193,10 @@ are clean, and say which checks you ran to conclude that.
 | Signal | Count | Notes |
 |---|---|---|
 | Joins built / refreshed / retired | <n>/<n>/<n> | <which tasks> |
-| Rebases · conflicts resolved | <n> · <n> | |
+| Base syncs · conflicts resolved | <n> · <n> | <how many were squash-merge collisions> |
+| **Conflict latency** | median <n>m · worst <n>m | base moved → detected → clean again |
+| Scope-check failures | <n> | <PRs whose diff showed foreign files, and why> |
+| Silent re-targets by GitHub | <n> | <PRs GitHub re-based when a parent branch was deleted> |
 | `waiting-for-merge` conversions | <n> | should be > 0 only if the audit caught something |
 | Stalls (3+ ticks) | <n> | <reasons> |
 | Re-drafts after ready | <n> | <reasons — each one is a readiness miss> |

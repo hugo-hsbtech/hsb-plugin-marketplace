@@ -120,7 +120,7 @@ dependency *levels*, not stop-and-wait barriers.
    stacks its PR on that blocker's branch; a task with **zero or 2+** blockers targets
    the **integration branch** (the convergence point). No task PR targets `main`.
 3. As a base advances (blocker gets commits, or merges and its branch is deleted),
-   rebase the dependent onto the new base and keep going — flow, don't halt.
+   merge the new base into the dependent and keep going — flow, don't halt.
 4. If a task's real diff diverges from its brief's touch set, re-run this skill to
    recompute the graph — a wider-than-expected touch set can create new conflicts.
 5. Low-confidence tasks (§1) should be scoped/clarified before they're dispatched.

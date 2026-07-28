@@ -99,7 +99,7 @@ what the task does.)
   blocker's branch exists; a multi-blocker task builds its join branch from those
   branches and starts too. **"Waiting for a merge" is never a valid reason for a task
   to sit still** — every tick, run the **Flow audit** (below) and convert any such
-  task into a dispatchable one (join/rebase/re-target). The only ordering that exists
+  task into a dispatchable one (join / base-sync / re-target). The only ordering that exists
   is which branch a PR is based on.
 - **Never merge the plan PR into `main`.** That gate is the human's, always, with no
   override short of the user merging it themselves or explicitly instructing you to.
@@ -169,7 +169,7 @@ what the task does.)
   decline with a reasoned reply, or ask for clarification. Full protocol: **JUDGE
   BEFORE YOU ACT** in `references/task-agent.md`.
 - **No silent fixes.** Whenever code changes in response to a review comment, a
-  review, red CI, or a conflict rebase, the per-task agent MUST post a real `gh`
+  review, red CI, or a base sync/conflict, the per-task agent MUST post a real `gh`
   reply/comment on the PR *and verify it posted* (capture its URL) before treating
   the item as handled. A pushed commit is never a substitute for a reply. Full
   protocol: **NO SILENT FIXES** in `references/task-agent.md`.
@@ -190,7 +190,7 @@ what the task does.)
   confirm a step, or approve a gate: pick the recommended option, document it (and
   its alternatives + rollback) in the PR Decision Log, and continue. **Process
   questions are never asked at all** — whether to un-draft a PR, whether to merge an
-  approved one, which base a PR takes, when to rebase: you decide from the rules here.
+  approved one, which base a PR takes, when to sync it: you decide from the rules here.
   The user steers *asynchronously* — by replying here to the orchestrator, or via PR
   comments/reviews (which the monitor pass picks up and applies). A genuine
   *product / policy* question the code can't answer is not asked as a blocking prompt
@@ -364,22 +364,47 @@ Spawning a monitor agent per open PR per tick just to learn "nothing changed" is
 single biggest quota leak in a long run. Kill it with a snapshot diff:
 
 1. **One batched read-only GraphQL call** covering ALL of the cycle's open PRs
-   (task PRs + the plan PR), using aliases — per PR fetch only:
-   `updatedAt, headRefOid, mergedAt, isDraft, reviewDecision, mergeStateStatus,`
-   and the last commit's `statusCheckRollup { state }`:
+   (task PRs + the plan PR) **and every base ref** — per PR:
+   `updatedAt, headRefOid, baseRefName, mergedAt, isDraft, reviewDecision, mergeable,
+   mergeStateStatus,` the last commit's `statusCheckRollup { state }`, **plus the head
+   OID of the integration branch and of every task/join branch**:
    ```
    gh api graphql -f query='query{ repository(owner:"O",name:"R"){
      t1: pullRequest(number:101){ ...prSnap }
      t2: pullRequest(number:102){ ...prSnap }
-     plan: pullRequest(number:100){ ...prSnap } } }
-   fragment prSnap on PullRequest { updatedAt headRefOid mergedAt isDraft
-     reviewDecision mergeStateStatus
+     plan: pullRequest(number:100){ ...prSnap }
+     integRef: ref(qualifiedName:"refs/heads/cadence/<slug>-integration"){ target{oid} }
+     t1Ref:    ref(qualifiedName:"refs/heads/cadence/<slug>-t1-…"){ target{oid} } } }
+   fragment prSnap on PullRequest { updatedAt headRefOid baseRefName mergedAt isDraft
+     reviewDecision mergeable mergeStateStatus
      commits(last:1){nodes{commit{statusCheckRollup{state}}}} }'
    ```
+   **Why the refs matter:** when the human merges a PR, the *dependents'* PRs do not
+   change — their `updatedAt` doesn't move — but their **base ref does**. Without
+   watching refs, a merge silently leaves every dependent behind or conflicted and
+   nothing wakes up to fix it. A moved base ref is a delta for **every** PR based on it.
 2. **Diff against `run.json.prSnapshot[<taskId>]`.** Any field differs (or no
    snapshot yet) → that PR has news → its task gets a monitor agent this tick
    (if idle). All fields equal → **spawn nothing for that task** — record the tick
-   as quiet for it.
+   as quiet for it. Three exceptions that override "no delta":
+   - **`mergeable: UNKNOWN` is NOT "no news."** GitHub computes mergeability *lazily*:
+     right after a base moves it returns `UNKNOWN`, and a naive `UNKNOWN == UNKNOWN`
+     comparison reads as quiet — which is exactly how a conflicted PR sits unnoticed
+     for hours. Treat `UNKNOWN` as **unresolved**: never count that PR's tick as quiet,
+     re-query next tick at `baseSeconds` (the query itself is what makes GitHub compute
+     it), and if it is still `UNKNOWN` after ~3 tries, spawn the monitor anyway to
+     determine mergeability locally (`git merge --no-commit --no-ff` dry run).
+   - **A base ref that moved** → delta for every dependent, even if their own fields
+     are untouched (see step 2b).
+   - **`mergeStateStatus` ∈ `DIRTY`/`BEHIND`, or `mergeable: CONFLICTING`** → this PR
+     is **top priority** and gets a monitor agent **every tick until it's clean**,
+     whatever else is happening.
+2b. **A merge fans out immediately — in the SAME tick.** When the snapshot shows a task
+   PR merged, or the integration/blocker ref moved, spawn a sync monitor for **every
+   open dependent** at once (one message, parallel agents), not one per subsequent tick.
+   The human merges several PRs in a row; the dependents must all be brought current
+   right away, not over the next half hour. Any of this **resets `monitorBackoff` to
+   `baseSeconds`** — a moved base or a conflict means the run is HOT, never quiet.
 3. **Store the fresh values in `prSnapshot`** every tick. **Re-baseline after an
    agent acts:** when a monitor/fix agent completes, take a fresh snapshot of its PR
    before storing, so the agent's own replies/pushes don't read as "news" next tick.
@@ -402,14 +427,15 @@ to spawn, classify **every non-terminal task** with a reason it is not advancing
 | `dispatchable` — base exists (or can be built), idle | — | **spawn its agent now** |
 | `agent-in-flight` | ✅ | skip (its agent owns it) |
 | `awaiting-human-review` — PR ready, reviewers pending | ✅ | nothing; it's in a human's queue |
+| **`conflicted` / `behind`** — base moved under it (`DIRTY`/`BEHIND`/`CONFLICTING`, or `mergeable: UNKNOWN` unresolved) | ❌ **defect if it persists** | **highest priority: spawn its agent NOW**, every tick until clean. A conflicted PR is unreviewable *and* shows the wrong diff — it must never sit waiting for a human to notice |
 | `awaiting-human-decision` — an open blocking decision | ✅ | ensure it's in `attention`; remind per the decision rules |
 | `blocked-by-failed-dep` — a blocker is `failed` | ✅ | surface to the human; don't silently retry |
 | `waiting-for-blocker-branch` — blocker not started yet | ✅ *only* while the blocker is itself dispatchable/in flight | it clears as soon as the blocker's branch is pushed |
-| **`waiting-for-merge`** — anything held because another PR hasn't merged | ❌ **defect** | **fix it now**: build/refresh the **join base**, rebase onto the advancing base, or re-target the PR — then dispatch |
+| **`waiting-for-merge`** — anything held because another PR hasn't merged | ❌ **defect** | **fix it now**: build/refresh the **join base**, merge the advancing base in, or re-target the PR — then dispatch |
 
 Rules:
 - **`waiting-for-merge` is never allowed to persist a tick.** Convert it (join base,
-  rebase, re-target) or record why conversion is impossible in `run.json.stalls[]`
+  base-sync, re-target) or record why conversion is impossible in `run.json.stalls[]`
   and surface it in the turn's `attention` list. Silence is the failure mode.
 - **Starvation guard.** Any task that reports the same non-`dispatchable` reason for
   **3 consecutive ticks** gets an entry in `run.json.stalls[]`
@@ -614,7 +640,7 @@ any `waiting-for-merge`). Then, of the active tasks, act ONLY on the **idle** on
 | `pending` (base available) | **spec agent** — verify-and-extend the brief, decides `complexity`; **fuses into implement for `trivial`/`low`** (**opus/high**) → `specified` or `open` |
 | `specified` | **implement agent** — TDD build → opens PR (**model = `modelPolicy[complexity]`**) → `open` |
 | `open` **with a snapshot delta** | **monitor agent** — Monitor pass on the settled PR (**sonnet/low**) |
-| `open`, no delta, but **readiness or auto-merge may now pass** (draft whose blocker just merged, approval recorded and guards satisfiable, a base that advanced) | **monitor agent** (**sonnet/low**) — the readiness/auto-merge/rebase re-check is work even when the PR itself didn't change |
+| `open`, no delta, but **readiness or auto-merge may now pass** (draft whose blocker just merged, approval recorded and guards satisfiable, a base that advanced) | **monitor agent** (**sonnet/low**) — the readiness / auto-merge / base-sync re-check is work even when the PR itself didn't change |
 | `open`, no delta, with an **open decision due for a reminder** | **monitor agent** (**sonnet/low**) — one reminder, then back to quiet |
 | `open` with **no delta** and nothing above | **nothing — quiet, skip** (record the quiet tick) |
 | `merged` | **cleanup agent** (**sonnet/low**) — recovery only: the normal path is the monitor agent doing cleanup in the tick that detects the merge; spawn this only if a cleanup was interrupted |
@@ -664,10 +690,11 @@ After the tick's per-task agents return, the top orchestrator does only bookkeep
   blocker's branch when stacked; all blockers' branches, joined, for 2+). A dependent
   is dispatched right after its parents' branches are pushed — it does NOT wait for
   their PRs to merge. Never freeze a wave waiting on another wave's merges.
-- **Rebase/refresh, don't block, when a base advances:** when a blocker's branch gets
-  new commits or merges, the dependent task's agent rebases onto the updated base — or
-  refreshes/retires its join branch — on its next tick (Monitor pass step 4). Flow
-  continues, nothing halts.
+- **Sync, don't block, when a base advances:** when a blocker's branch gets new commits
+  or merges, the dependent task's agent **merges the updated base in** (never a rebase,
+  never a force-push on an open PR) — or refreshes/retires its join branch — on its next
+  tick (Monitor pass step 4), then re-checks that the diff still shows only its own
+  scope. Flow continues, nothing halts.
 - **Un-draft, and merge on approval, without being asked:** each tick the task agents
   re-run the readiness checklist and the auto-merge guards themselves. The
   orchestrator only records the outcome and reports it.
@@ -678,8 +705,11 @@ After the tick's per-task agents return, the top orchestrator does only bookkeep
 - **Re-arm the loop (mandatory unless fully done) — at the ADAPTIVE interval.**
   Call **ScheduleWakeup** with `delaySeconds` computed from `run.json.monitorBackoff`
   (`{baseSeconds: 180, maxSeconds: 1800, quietTicks}`):
-  - **Any agent in flight, any spawn this tick, any snapshot delta, or new work
-    dispatchable** → the run is HOT: reset `quietTicks = 0`, sleep `baseSeconds`.
+  - **Any agent in flight, any spawn this tick, any snapshot delta, new work
+    dispatchable, a base ref that moved, a PR that is conflicted/behind, or a
+    `mergeable: UNKNOWN` still unresolved** → the run is HOT: reset `quietTicks = 0`,
+    sleep `baseSeconds`. A merge the human just made must never be followed by a
+    30-minute silence while dependents sit conflicted.
   - **Fully quiet tick** (no deltas, no spawns, nothing in flight — everyone parked
     on humans): increment `quietTicks`, sleep
     `min(baseSeconds × 2^quietTicks, maxSeconds)` — 180 → 360 → 720 → 1440 → 1800.
@@ -711,7 +741,7 @@ run the **readiness checklist** and un-draft itself if it passes) →
 comment/review; NO SILENT FIXES — verified `gh` replies with captured URLs; SIGNAL
 RESOLUTION — resolve fixed threads + re-request the reviewer, bounded by the
 REVIEW CONVERGENCE BOUND: max 3 fix rounds per reviewer, then a summary comment
-and park for the human; harvest answers to its open decisions; CI fixes; rebases /
+and park for the human; harvest answers to its open decisions; CI fixes; base syncs /
 join refreshes onto its advancing base; re-run readiness; and **merge itself under an
 intact human approval** per Approval-authorized auto-merge) → **Cleanup** on merge,
 then it dies. It is the sole writer of its `tasks/<id>.json`, syncs its own tracker
@@ -726,17 +756,27 @@ their own append-only log (same single-writer rule as the state files):
 `events/run.jsonl` (yours) and `events/<id>.jsonl` (each task agent's). One JSON line per
 event: `{ts, actor, kind, detail, pr?, url?, sha?, model?}`.
 
+**`run.json` and `tasks/<id>.json` are overwritten in place — they say what is true
+now, never what happened. The event log is the ledger, and it is the only one.** So:
+**if you wrote a field, you owe an event.** Every task `status` transition emits
+`state.changed` (`from` → `to` + trigger); every PR snapshot field you observe changing
+emits `snapshot.delta` (which fields, `old` → `new`) — that is the per-PR change ledger
+the report renders; every base ref that moves emits `base.moved` with the dependents it
+affects.
+
 Log the moment it happens — spawns, complexity decisions, PR opened/ready/re-drafted,
-decisions raised/answered, reviews and fix rounds, CI flips, rebases, joins, guard
-blocks, auto-merges, merges, stalls, escalations, failed gates, and one `tick` line per
+decisions raised/answered, reviews and fix rounds, CI flips, base syncs, conflicts and
+how they were resolved, silent re-targets, scope checks, joins, guard blocks,
+auto-merges, merges, stalls, escalations, failed gates, and one `tick` line per
 wake-up. The full kind list and the rendering rules are in
 **`references/cycle-report.md`**.
 
 From those logs Cadence renders **`<runDir>/report.md`** — a single self-contained file
-the human can read or paste to anyone: outcome, per-task table, **what needed you** (with
-how long each thing waited), **what went wrong** (Cadence's own failures included), flow
-health, cost, timeline, follow-ups, and a copy-pasteable *Feedback for the Cadence
-maintainer* section.
+the human can read or paste to anyone: outcome, a per-task table, a **per-task ledger** (every state and
+PR change with its timestamp and evidence, including conflict latency: base moved →
+detected → clean again), **what needed you** (with how long each thing waited), **what
+went wrong** (Cadence's own failures included), flow health, cost, timeline, follow-ups,
+and a copy-pasteable *Feedback for the Cadence maintainer* section.
 
 - **Write it at the end condition, before the final summary**, and print its path.
 - **Render it on demand** whenever the user asks how the cycle went (or runs
@@ -818,9 +858,42 @@ and record which item failed.
 3. Self-review done for its complexity (or `trivial` → not required).
 4. No unanswered **blocking** open decision.
 5. PR body complete: what & why, how to test, decision log if any, open decisions if any.
+6. **Current with its base and clean in scope** — not `DIRTY`/`BEHIND`/`CONFLICTING`,
+   and the diff against its base contains only this task's own work (the **scope
+   check**, below). Inviting review onto a conflicted PR, or onto one showing another
+   task's files, wastes the reviewer's time and is what makes a PR "not worth reviewing
+   yet".
 
 If a PR later regresses (new in-flight work, a new blocking decision, CI goes red),
 re-draft it (`gh pr ready --undo`) and post a one-line comment saying why.
+
+### Staying current with a moving base — and keeping the diff honest
+
+The human merges PRs while the cycle runs. That is normal and expected, and it is the
+moment most likely to leave a PR conflicted with a diff that no longer matches its
+scope. Two rules, both executed by the task's own agent (mechanics in
+`references/task-agent.md`, Monitor step 4):
+
+- **Merge the base in — never force-push.** When a base advances, bring the branch
+  current with `gh api repos/{owner}/{repo}/pulls/<n>/update-branch -X PUT` (GitHub's
+  own merge-base-in, no local work) or a local `git merge origin/<base>` when that
+  fails or conflicts. **Do not rebase and do not force-push an open PR**: the human may
+  be mid-review, and a rewrite unanchors their inline comments and can dismiss their
+  approval. A merge commit is a small price for review continuity.
+- **Then check the scope.** `git diff origin/<base>...HEAD --name-only` must contain
+  only files this task legitimately touches (its plan brief's touch set + anything the
+  spec phase justified). If foreign files appear, the sync went wrong — do not invite
+  review on it. The usual cause is a **squash-merged blocker**: the blocker's work
+  landed on the base as one new commit while this branch still carries the blocker's
+  *original* commits, so the same change exists twice — git conflicts, and the PR shows
+  the blocker's files as if they were this task's. The fix is to resolve those conflicts
+  **in the base's favor** (the blocker's version already merged; this branch's copy is a
+  stale duplicate), then re-run the check until the diff is this task's work alone.
+
+Record `filesChanged` and the scope-check verdict in the task file, and put
+`Files changed: N` in the PR body so a reviewer can spot pollution at a glance. If the
+diff is genuinely large *and* correct, say why in the body — an unexplained 40-file PR
+for a 3-file task is a defect, not a big task.
 
 ### Approval-authorized auto-merge (task PRs only — NEVER the plan PR)
 **An approving review by a human on a task PR is that human's authorization to merge
@@ -834,7 +907,7 @@ require the human's click (record the choice when the user asks for it).
 |---|---|---|
 | 1 | **Human approval exists** | the only approvals are from bots/apps — a bot approval never authorizes a merge on its own |
 | 2 | **Approval still stands** | it was dismissed, or any *later* review is `CHANGES_REQUESTED`, or `reviewDecision ≠ APPROVED` |
-| 3 | **Approval still describes the code** | the head moved since `approvedSha` in a way that is more than a pure rebase or a `trivial`-class edit (see below) |
+| 3 | **Approval still describes the code** | the head moved since `approvedSha` in a way that is more than a base-sync merge or a `trivial`-class edit (see below) |
 | 4 | **No open decision at all** | any `pendingDecisions[]` entry is not `resolved` — blocking or not |
 | 5 | **Every comment answered** | any human comment/thread lacks a recorded `replyUrl`, or a fixed thread is still unresolved |
 | 6 | **CI fully green** | any check failing, or a required check still pending |
@@ -846,9 +919,10 @@ require the human's click (record the choice when the user asks for it).
 review's `commit.oid`) when the approval is first observed. At merge time the head is
 acceptable only when it is:
 - **identical** to `approvedSha`; or
-- a **pure rebase/merge of the base** — the branch's own patch set against its merge
-  base is unchanged (`git diff <mergeBase>..<sha>` produces the same patch-ids before
-  and after); or
+- a **base-sync merge** — the only new commits are the merge of the updated base (plus
+  conflict resolutions taking the base's already-merged version), and the branch's own
+  patch set against its merge base is unchanged: `git diff <mergeBase>..HEAD` yields the
+  same patch-ids as it did at `approvedSha`; or
 - **`trivial`-class only** — the post-approval diff touches nothing but comments,
   docs, or formatting, with no behavior change.
 
@@ -870,7 +944,7 @@ integration) the guards are re-checked and it merges. Report it as
 1. Re-verify all guards from this tick's payload — never from a cached snapshot.
 2. If still draft, `gh pr ready <n>` first (a draft PR cannot be merged).
 3. **Post the authorization record before merging** and capture its URL: who approved,
-   at which SHA, what changed since (nothing / rebase / trivial), and the guards that
+   at which SHA, what changed since (nothing / base-sync / trivial), and the guards that
    passed. **NO SILENT MERGES** — a merge with no comment explaining its authority is
    the same defect as a silent fix.
 4. Merge into its base with the repo's allowed method (`gh repo view --json

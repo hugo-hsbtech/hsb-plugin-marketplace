@@ -13,8 +13,12 @@ sha?, model?}` — the moment it happens: `task.spawn`, `task.complexity`, `join
 refreshed|retired`, `pr.opened`, `pr.ready`, `pr.redraft` (with the reason),
 `decision.raised|reminded|answered|shipped_unresolved`, `review.received`,
 `review.round`, `review.parked`, `comment.answered`, `ci.red|green`, `fix.pushed`,
-`rebase`, `conflict`, `guard.blocked` (which guard, why), `automerge`, `merged`,
-`gate.failed`, `escalation`, `task.failed`. It is append-only and yours alone — never
+`basesync`, `conflict`, `conflict.resolved`, `pr.retargeted`, `scope.checked`,
+`scope.polluted`, `guard.blocked` (which guard, why), `automerge`, `merged`,
+`gate.failed`, `escalation`, `task.failed` — **plus `state.changed` on every `status`
+transition** (`from` → `to` + what caused it). Your task file holds only the current
+value, so a transition you don't log is history that no longer exists: **if you wrote a
+field, you owe an event.** It is append-only and yours alone — never
 rewrite it, never touch another task's. The cycle report is rendered from these logs, so
 an unlogged event is simply lost: **log the bad ones too** (re-drafts, failed gates,
 blocked merges, parked reviewers). Schema and kinds:
@@ -107,7 +111,7 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
    `cadence/<slug>-t<id>` with no description is **not acceptable**. Create it:
    `git worktree add .claude/worktrees/<branch> -b <branch> origin/<base>`.
    Record `branch`, `worktreePath`, and `baseBranch` (the resolved base) to
-   `tasks/<id>.json` (so the Implement phase, PR creation, and rebases reuse the
+   `tasks/<id>.json` (so the Implement phase, PR creation, and base syncs reuse the
    exact same base). Use the superpowers `using-git-worktrees` skill. NEVER work on
    `main`, and never branch a task off `main`.
 
@@ -529,27 +533,67 @@ the task's own worktree; writes its own `tasks/<id>.json`. For this task's PR `<
    **`gh pr comment <n> --body '…'`** describing the failure + the fix + commit
    SHA, and record its URL. A CI fix without a posted comment violates NO SILENT
    FIXES.
-4. **Merge conflict / behind base? Base advanced?** Keep your PR sitting on a current
-   base — this is routine, not exceptional, because the cycle flows instead of gating.
-   - **Stacked (1 blocker)** → rebase onto `origin/<blocker branch>`. If that blocker
-     merged and its branch was deleted, re-base onto the integration branch and update
-     `baseBranch` (`gh pr edit <n> --base <integrationBranch>`).
-   - **Join base (2+ blockers)** → **refresh the join** whenever a blocker head moved
-     (compare against `joinedShas`): in the join worktree, merge the current
-     integration plus each blocker's new head, push the join, then rebase your task
-     branch onto it. Once **every** blocker has merged into integration, **retire the
-     join**: re-target the PR to the integration branch, set `baseBranch` to it, drop
-     `joinBranch`, delete the join branch locally and remotely.
-   - **No blockers** → rebase onto the integration branch. For the **plan PR** it's
-     `origin/main`.
+4. **Base moved / behind / conflicted? Sync NOW — this is the highest-priority work
+   in a monitor tick.** The human merges PRs while the cycle runs, so a base advancing
+   under you is routine, not exceptional. A conflicted PR is unreviewable *and* shows
+   the wrong diff, so it must never sit waiting to be noticed.
 
-   Never rebase a task onto `main`. Resolve conflicts, force-push **your** branch
-   (never `main`, never another task's). **Post a `gh pr comment`** noting the rebase
-   or join refresh (and call out any behavior change), and record its URL.
+   **4a. Reconcile your base first.** Compare the PR's real `baseRefName` (from the
+   step-0 payload) with your `baseBranch`. **GitHub silently re-targets a PR when its
+   base branch is deleted** — merge a stacked parent with "delete branch" on and your
+   PR is suddenly based on the grandparent. If they differ, update `baseBranch` (and
+   `joinBranch` if it retired) *before* syncing, and say so in the sync comment.
+   - **Stacked (1 blocker)** → base = `origin/<blocker branch>`; if that blocker merged
+     and its branch is gone, base = the integration branch
+     (`gh pr edit <n> --base <integrationBranch>`).
+   - **Join base (2+ blockers)** → refresh the join whenever a blocker head moved
+     (compare against `joinedShas`): in the join worktree, merge current integration +
+     each blocker's new head, push the join, then sync your branch onto it. Once
+     **every** blocker has merged into integration, **retire the join** — re-target the
+     PR to integration, set `baseBranch`, drop `joinBranch`, delete the join branch.
+   - **No blockers** → base = the integration branch. For the **plan PR** it's
+     `origin/main`. Never sync a task onto `main`.
+
+   **4b. Merge the base in — NEVER rebase, NEVER force-push an open PR.** A human may
+   be mid-review: a force-push unanchors their inline comments and can dismiss their
+   approval. Prefer GitHub's own no-op-for-you path, then fall back to local:
+   ```bash
+   gh api repos/{owner}/{repo}/pulls/<n>/update-branch -X PUT   # merges base into head
+   # if that fails or reports conflicts, do it in your worktree:
+   git fetch origin && git merge origin/<baseBranch>            # resolve, then:
+   git push                                                     # plain push, no --force
+   ```
+
+   **4c. Resolve a squash-merge collision in the BASE's favor.** The classic conflict
+   after a human merges: the blocker's work landed on your base as **one squashed
+   commit**, while your branch still carries the blocker's **original** commits — the
+   same change exists twice, so git conflicts, and the PR starts showing the blocker's
+   files as if they were yours. For every hunk that is your copy of a change **already
+   merged into the base**, take the **base's** version — the blocker's work is
+   authoritative there and your copy is a stale duplicate. Keep your own work untouched.
+   If you cannot tell whose change a hunk is, check whether the base already contains it
+   (`git log origin/<base> --oneline -S'<distinctive line>'`) before deciding.
+
+   **4d. Scope check — the diff must be your task's work and nothing else.**
+   ```bash
+   git diff origin/<baseBranch>...HEAD --name-only     # three dots: vs the merge base
+   ```
+   Every path must be one this task legitimately touches (its brief's touch set plus
+   anything the spec phase justified). Foreign files mean the sync went wrong — almost
+   always 4c resolved the wrong way. **Fix it and re-check; do not push a polluted diff
+   and do not invite review onto one.** Record `filesChanged` + the verdict in
+   `tasks/<id>.json`, and keep `Files changed: N` current in the PR body. If the diff is
+   genuinely large *and* correct, say why in the body — an unexplained 40-file PR for a
+   3-file task is a defect, not a big task.
+
+   **4e. Announce it.** `gh pr comment <n>` describing what moved, what you merged in,
+   how any collision was resolved, and the resulting file count — record the URL (NO
+   SILENT FIXES). Log `basesync`/`conflict`/`conflict.resolved`/`scope.checked` events. Then re-run the readiness
+   checklist: a PR that went draft for a conflict un-drafts itself once clean.
 
    > **Never report "waiting for #N to merge" as your state.** If your base advancing
-   > is what you need, do the rebase/refresh now — that's this step. The only thing
-   > you legitimately wait on is a human (review, decision) or CI.
+   > is what you need, sync now — that's this step. The only things you legitimately
+   > wait on are a human (review, decision) and CI.
 5. **Re-run the readiness checklist** (Implement phase, step 5's block). Un-draft with
    `gh pr ready <n>` the moment all five items pass — most often this is the tick
    where CI went green, the last blocking decision got answered, or the fix round
@@ -583,7 +627,8 @@ the task's own worktree; writes its own `tasks/<id>.json`. For this task's PR `<
    > `headRefOid` with the `approvedSha` from your ledger. The approval survives only
    > when the head is:
    > - **identical** to `approvedSha`; or
-   > - a **pure rebase/merge of the base** — your branch's own patch set against its
+   > - a **base-sync merge** — the only new commits merge the updated base (plus
+   >   conflict resolutions taking the base's already-merged version); your own patch set against its
    >   merge-base is unchanged (compare `git patch-id` over
    >   `git diff <mergeBase>..<approvedSha>` and `git diff <mergeBase>..HEAD`); or
    > - **`trivial`-class only** — the post-approval diff touches nothing but comments,
@@ -597,7 +642,7 @@ the task's own worktree; writes its own `tasks/<id>.json`. For this task's PR `<
    **If every guard passes:**
    1. If still draft → `gh pr ready <n>` (a draft PR can't be merged).
    2. **Post the authorization record first, and capture its URL** — who approved, at
-      which SHA, what changed since (nothing / rebase / trivial), and each guard that
+      which SHA, what changed since (nothing / base-sync / trivial), and each guard that
       passed. **NO SILENT MERGES**: a merge nobody can audit from the PR itself is the
       same defect as a silent fix.
    3. Merge into your base with a method the repo allows (`gh repo view --json

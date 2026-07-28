@@ -65,6 +65,9 @@ acceptance-criteria checklist, no multi-section scaffolding.**
 
 <2–4 plain steps, or a single line if it's that simple. Setup → action → expected.>
 
+<!-- Files changed: <N>. Keep this current after a base sync — if it doesn't match the
+     task's scope, fix the sync before asking for review. -->
+
 <!-- Decision log ONLY if a real autonomous choice was made — otherwise delete this. -->
 ## Decisions
 
@@ -125,6 +128,8 @@ flowchart LR
 ## Verification
 
 - Lint/format: <result> · Tests: <suites + result> · Manual: <what you exercised, if any>
+- **Files changed:** <N> — <one line: the scope this touches. If N looks large for the
+  task, say why here; a diff that doesn't match the stated scope is a bug, not a big task.>
 
 ## Notes / risks
 

@@ -48,9 +48,13 @@ the per-task playbook.
    `tasks/<id>.json`; glob `*-<slug>-cycle/run.json` + matching `planPath` to resume;
    per `references/execution-state.md`). Open the integration branch + plan PR.
 2. **Each tick: change detection first, then spawn only where there is work.** Run
-   ONE batched read-only GraphQL call over all the cycle's open PRs and diff it
-   against `run.json.prSnapshot` — an idle `open` task with **no delta spawns
-   nothing**. Then spawn one `Agent` per IDLE active task with work, in a single
+   ONE batched read-only GraphQL call over all the cycle's open PRs **and every base
+   ref**, diffed against `run.json.prSnapshot`/`refSnapshot` — an idle `open` task with
+   **no delta spawns nothing**. Three things are never "no delta": a **moved base ref**
+   (that's how a merge you just made reaches its dependents — their own PR fields don't
+   change), **`mergeable: UNKNOWN`** (GitHub computes it lazily; re-query until it
+   resolves), and a PR that is **conflicted/behind** (top priority, every tick until
+   clean, and the run stays HOT). Then spawn one `Agent` per IDLE active task with work, in a single
    message — `pending`→spec (verifies-and-extends the plan brief instead of
    re-analyzing; **fuses straight into implement for `trivial`/`low` complexity**),
    `specified`→implement, `open` **with a delta**→monitor, `merged`→cleanup
@@ -76,7 +80,7 @@ the per-task playbook.
    soon as the branches it depends on **exist** — a stacked child the moment its
    blocker's branch is pushed, a multi-blocker task as soon as it can build its join.
    Anything held because another PR hasn't merged is a **defect**: convert it (build or
-   refresh the join, rebase, re-target) that same tick. Each task PR targets its base,
+   refresh the join, merge the base in, re-target) that same tick. Each task PR targets its base,
    never `main`. **Draft means "not reviewable yet"** (agent in flight, red gate/CI, no
    self-review, unwritten body, unanswered blocking decision) — *not* "not mergeable
    yet"; being stacked is **not** a reason to stay draft. Un-draft yourself the moment
@@ -87,7 +91,7 @@ the per-task playbook.
 4. The per-task agent monitors its own PR every tick: **judge** each review/comment on
    its merits (agree → fix · better alternative → fix differently · wrong/out-of-scope
    → decline with a reasoned reply · ambiguous → ask) — never blindly obey; fix red CI;
-   rebase/refresh its base as it advances; harvest answers to its open decisions — all
+   merge its base in as it advances (never a force-push on an open PR) and re-check that the diff still matches its scope; harvest answers to its open decisions — all
    with **verified `gh` replies** (no silent fixes). When a **human approves** its PR
    and every guard holds (approval intact and not stale, no open decision, all comments
    answered, CI green, mergeable clean), it merges its own PR into its base, posting
@@ -105,7 +109,7 @@ the per-task playbook.
    loop only when the **plan PR is merged into `main`** and every task is
    `done`/`failed`.
 
-Be autonomous about process and honest about state: **decide** drafts, bases, rebases
+Be autonomous about process and honest about state: **decide** drafts, bases, base syncs
 and readiness yourself; **merge a task PR only** under an intact human approval that
 still describes the code (or an explicit user grant for a named scope), always posting
 the authorization on the PR first; **never merge the plan PR** and never touch `main`.

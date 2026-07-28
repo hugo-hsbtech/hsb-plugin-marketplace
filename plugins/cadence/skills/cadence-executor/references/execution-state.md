@@ -73,13 +73,21 @@ must never be committed onto a feature branch).
     "T1": {
       "updatedAt": "2026-06-23T12:20:11Z",
       "headRefOid": "9f1c2ab…",
+      "baseRefName": "cadence/matchmaking-followups-integration",
       "mergedAt": null,
       "isDraft": true,
       "reviewDecision": "REVIEW_REQUIRED",
+      "mergeable": "MERGEABLE",
       "mergeStateStatus": "CLEAN",
-      "ciState": "SUCCESS"
+      "ciState": "SUCCESS",
+      "unknownSince": null
     }
   },
+  "refSnapshot": {
+    "cadence/matchmaking-followups-integration": "4c7d1e0…",
+    "cadence/matchmaking-followups-t1-add-reply-correlation-matcher": "9f1c2ab…"
+  },
+  "//refSnapshot": "Head OID of the integration branch and every task/join branch. A moved ref is a delta for EVERY PR based on it — this is how a merge the human just made wakes up its dependents, since their own PR fields don't change when their base moves.",
   "approvalMergePolicy": "auto",
   "//approvalMergePolicy": "'auto' (default) = a task PR with an INTACT human approval is merged by its own agent once every guard passes (Approval-authorized auto-merge). 'off' = the human always clicks merge. The plan PR → main is NEVER auto-merged under either setting.",
   "mergeAuthorization": null,
@@ -158,7 +166,12 @@ then uses it to pick the Implement agent's model. `agentKind` ∈
   "prUrl": "https://github.com/org/repo/pull/1203",
   "isDraft": true,
   "draftReason": "ci_red",
+  "//draftReason": "Why it isn't reviewable: agent_in_flight | gate_red | ci_red | no_self_review | body_incomplete | blocking_decision | conflict | scope_polluted.",
   "readyAt": null,
+  "baseHeadSha": "4c7d1e0…",
+  "lastSyncedBaseSha": "4c7d1e0…",
+  "filesChanged": 4,
+  "scopeCheck": { "at": "2026-06-23T13:22:00Z", "verdict": "clean", "foreignPaths": [] },
   "lastCheckedAt": "2026-06-23T12:25:00Z",
   "pendingDecisions": [
     { "id": "D1", "question": "Purge or archive expired invites?",
@@ -174,7 +187,7 @@ then uses it to pick the Implement agent's model. `agentKind` ∈
       "state": "APPROVED", "approvedSha": "9f1c2ab…", "at": "2026-06-23T13:02:00Z" }
   ],
   "autoMerge": null,
-  "//autoMerge": "Set only when this agent merged its own PR under an intact human approval: { authorizedBy, approvedSha, mergedSha, headDelta: 'identical'|'rebase'|'trivial', guards: {…}, mergedAt, commentUrl }.",
+  "//autoMerge": "Set only when this agent merged its own PR under an intact human approval: { authorizedBy, approvedSha, mergedSha, headDelta: 'identical'|'base-sync'|'trivial', guards: {…}, mergedAt, commentUrl }.",
   "answeredComments": [
     { "commentId": 882134, "threadId": "PRRT_kwDO…", "verdict": "agree",
       "replyUrl": "https://github.com/org/repo/pull/1203#discussion_r882140",
@@ -237,9 +250,17 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
   `min(baseSeconds × 2^quietTicks, maxSeconds)`. Defaults 180/1800. (A legacy
   `monitorIntervalSeconds` field, if present from an older run, is read as
   `baseSeconds`.)
-- `prSnapshot` — per-task change-detection baseline from the orchestrator's ONE
-  batched read-only GraphQL call (`updatedAt`, `headRefOid`, `mergedAt`, `isDraft`,
-  `reviewDecision`, `mergeStateStatus`, `ciState`). A monitor agent is spawned for an
+- `prSnapshot` / `refSnapshot` — per-task change-detection baseline from the
+  orchestrator's ONE batched read-only GraphQL call (`updatedAt`, `headRefOid`,
+  `baseRefName`, `mergedAt`, `isDraft`, `reviewDecision`, `mergeable`,
+  `mergeStateStatus`, `ciState`), **plus the head OID of every base ref**. Two rules that
+  exist because conflicts were being missed: (1) **a moved ref is a delta for every PR
+  based on it** — when the human merges, the dependents' own PR fields don't change, so
+  refs are the only signal; (2) **`mergeable: UNKNOWN` is never "no news"** — GitHub
+  computes mergeability lazily, so `UNKNOWN == UNKNOWN` must not read as quiet; stamp
+  `unknownSince` and re-query next tick, and after ~3 tries determine it locally with a
+  dry-run merge. A PR that is `DIRTY`/`BEHIND`/`CONFLICTING` is top priority and gets an
+  agent every tick until clean. A monitor agent is spawned for an
   idle `open` task ONLY when a field differs from this baseline (or none exists).
   Re-baselined right after that task's agent completes, so the agent's own
   replies/pushes don't read as news next tick. Detection only — the orchestrator
@@ -256,7 +277,7 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
   a PR comment thread is invisible, which is the failure this field exists to prevent.
 - `stalls` — tasks that reported the same non-dispatchable reason for 3+ consecutive
   ticks (`{id, reason, sinceTick, note}`), from the **Flow audit**. A `waiting-for-merge`
-  reason is a defect, not a stall: it must be converted (join/rebase/re-target) the
+  reason is a defect, not a stall: it must be converted (join / base-sync / re-target) the
   same tick.
 - `unresolvedDecisions` — decisions that were still open when their PR was merged
   anyway (by a human): the question, the default that therefore shipped, and the PR
@@ -282,9 +303,19 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
   it from a `renamedTitle` reported by a task agent so new PRs match the latest style.
 - `nextWakeupAt` — when `ScheduleWakeup` re-enters. Monitoring is in-session only — no
   cron / external scheduled agent.
+- `baseHeadSha` / `lastSyncedBaseSha` — the base's head when the branch was cut, and the
+  base commit last merged in. Together they say whether this branch is current, and they
+  are what makes a squash-merged parent detectable (the base advanced past
+  `lastSyncedBaseSha` while this branch still carries the parent's original commits).
+- `filesChanged` / `scopeCheck` — the size and honesty of the PR's diff:
+  `git diff origin/<base>...HEAD --name-only` after every base sync. `verdict`:
+  `clean` (only this task's files) or `polluted` (+ `foreignPaths`). A polluted diff is
+  fixed — usually by re-resolving a squash-merge collision in the base's favour — **before**
+  the PR is offered for review, and `filesChanged` is echoed in the PR body so a reviewer
+  can spot a mismatch at a glance.
 - `baseBranch` — a task's PR base, resolved from its blockers: the `integrationBranch`
   (no blockers), the **single blocker's branch** (stacked), or this task's
-  **`joinBranch`** (2+ blockers). Never `main`. Rebases and PR creation use this exact
+  **`joinBranch`** (2+ blockers). Never `main`. Base syncs and PR creation use this exact
   value; update it when a stacked base merges away or a join retires (then re-base onto
   integration and `gh pr edit --base` it).
 - `joinBranch` / `joinedShas` — for a 2+-blocker task: the synthetic base
@@ -312,7 +343,7 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
   `CHANGES_REQUESTED` or a dismissal clears that reviewer's approval.
 - `autoMerge` — set only when the task's own agent merged the PR under an intact human
   approval: who authorized it, `approvedSha` → `mergedSha`, the `headDelta` class
-  (`identical` / `rebase` / `trivial`), the guards that passed, and the URL of the
+  (`identical` / `base-sync` / `trivial`), the guards that passed, and the URL of the
   authorization comment posted before merging (NO SILENT MERGES). An approved PR whose
   **base isn't landable** (a parent task's branch with a still-open PR, or a join
   branch) is not merged — it reports `approved_awaiting_base` and merges on the tick
@@ -345,7 +376,7 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
    or a base advance could now pass, or an open decision is due its one reminder.
 2b. **Flow audit:** classify why every non-terminal task isn't advancing. Anything
    held because another PR hasn't merged is a **defect** — convert it this tick (build
-   or refresh the join base, rebase, re-target) and dispatch it. Record 3-tick
+   or refresh the join base, merge the base in, re-target) and dispatch it. Record 3-tick
    repeats in `stalls`. Rebuild `attention` from the task files.
 3. **Spawn one per-task agent per IDLE active task with work** (its **base is
    available** — integration, its single blocker's branch when stacked, or all

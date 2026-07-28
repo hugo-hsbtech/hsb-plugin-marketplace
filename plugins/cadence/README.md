@@ -33,6 +33,7 @@ still describes the code (see [Approval-authorized auto-merge](#approval-authori
 - [Execution model](#execution-model)
 - [Task lifecycle](#task-lifecycle)
 - [Draft, readiness, and merging](#draft-readiness-and-merging) — including [approval-authorized auto-merge](#approval-authorized-auto-merge)
+- [When you merge, the others don't break](#when-you-merge-the-others-dont-break)
 - [Which PR is which task](#which-pr-is-which-task)
 - [The cycle report](#the-cycle-report--evidence-of-how-the-run-actually-went) — evidence of how the run actually went
 - [Open decisions](#open-decisions--questions-you-can-actually-answer) — questions you can actually answer
@@ -64,7 +65,7 @@ Two skills, one hand-off:
 
 - **`cadence-planner`** decides *what can run in parallel*. Plan-only.
 - **`cadence-executor`** *makes it happen*, then babysits every PR — answering reviews,
-  fixing CI, rebasing on moving bases — until it lands. You review; it merges a task PR
+  fixing CI, keeping each branch current as you merge things under it — until it lands. You review; it merges a task PR
   once you've approved it, and hands you the final merge into `main`.
 
 ---
@@ -129,7 +130,7 @@ Cadence analyzes the repo, writes a wave schedule to
 ```
 
 From here it runs autonomously — opening branches and PRs, marking them ready when they
-are, answering review comments, fixing CI, rebasing on moving bases — and re-arms itself
+are, answering review comments, fixing CI, syncing branches as you merge under them — and re-arms itself
 on a scheduled loop until everything has landed. Approve a task PR and it merges that one
 for you; the final merge into `main` is yours. Every turn ends with what (if anything)
 needs you.
@@ -166,7 +167,7 @@ plan docs and is the convergence point every task ultimately lands on. It opens 
 
 **Flow, don't gate** — a task starts the moment the branches it depends on *exist*, not
 when their PRs *merge*. Work never freezes waiting on a human to click merge;
-dependencies are expressed by PR base, and rebases carry changes forward as bases
+dependencies are expressed by PR base, and base syncs carry changes forward as bases
 advance. Every tick a **flow audit** classifies why each unfinished task isn't moving,
 and anything held up "waiting for a merge" is treated as a defect to fix on the spot —
 by building or refreshing a join, rebasing, or re-targeting the PR.
@@ -275,7 +276,7 @@ is re-targeted straight at integration).
 stateDiagram-v2
   [*] --> Built: all blockers' BRANCHES exist<br/>(merged or not) — cut integration,<br/>merge each blocker in, push
   Built --> Refreshed: a blocker's branch advanced
-  Refreshed --> Built: task branch rebased onto the refreshed join
+  Refreshed --> Built: task branch syncs with the refreshed join
   Built --> Retired: every blocker has merged into integration<br/>→ the join carries nothing unique
   Retired --> [*]: PR re-targeted to integration,<br/>join branch deleted
   note right of Built
@@ -370,7 +371,7 @@ flowchart TD
   W(["wake-up"]) --> CD["change detection<br/>ONE batched read-only GraphQL<br/>over every open PR, diffed vs snapshot"]
   CD --> FA["flow audit<br/>why is each unfinished task not advancing?"]
   FA --> Q{"held because another<br/>PR hasn't merged?"}
-  Q -->|"yes — a defect"| CONV["convert it NOW<br/>build/refresh join · rebase · re-target"]
+  Q -->|"yes — a defect"| CONV["convert it NOW<br/>build/refresh join · base-sync · re-target"]
   Q -->|no| G{"idle (agentInFlight = false)<br/>and something to do?"}
   CONV --> G
   G -->|"no — agent owns it,<br/>or parked on a human"| SKIP["skip"]
@@ -493,7 +494,7 @@ same tick:
 |---|---|
 | a **human** approval exists | a bot approval never authorizes a merge on its own |
 | the approval still stands | not dismissed, no later `CHANGES_REQUESTED` |
-| **the approval still describes the code** | head is identical to the approved SHA, or differs only by a pure rebase or a comment/doc/formatting-only edit — any logic, test, config, dependency, migration, or CI change makes it **stale** (and when in doubt, it's stale) |
+| **the approval still describes the code** | head is identical to the approved SHA, or differs only by a base-sync merge or a comment/doc/formatting-only edit — any logic, test, config, dependency, migration, or CI change makes it **stale** (and when in doubt, it's stale) |
 | no open decision — blocking or not | you haven't been asked something that's still unanswered |
 | every comment answered, every fixed thread resolved | nothing left hanging |
 | CI fully green, cleanly mergeable | no failing/pending checks, no conflicts |
@@ -507,6 +508,48 @@ failed and re-requests review where that's the fix.
 
 Set `approvalMergePolicy: "off"` in the run state (or just say so when you ship) if you'd
 rather click the button yourself. Either way, **the plan PR into `main` is always yours.**
+
+---
+
+## When you merge, the others don't break
+
+Merging a PR mid-cycle is the moment most likely to leave the rest conflicted, stale, and
+showing a diff that has nothing to do with their scope. Cadence treats that as its job,
+not yours:
+
+- **It watches base branches, not just PRs.** When you merge, the *dependents'* PRs don't
+  change at all — their `updatedAt` never moves — but their base ref does. Cadence
+  snapshots every base ref's head, so a merge is a delta for every PR sitting on it.
+- **A merge fans out in the same tick.** Every open dependent is brought current at once,
+  in parallel — not one per wake-up over the next half hour. Any base move also resets
+  the backoff: a merge you just made is never followed by a 30-minute silence.
+- **`UNKNOWN` mergeability is treated as unresolved, not as "no news".** GitHub computes
+  mergeability lazily and answers `UNKNOWN` right after a base moves; comparing
+  `UNKNOWN` to `UNKNOWN` reads as "nothing changed", which is exactly how a conflicted PR
+  used to sit unnoticed. It's now re-queried until it resolves, and settled locally with
+  a dry-run merge if GitHub keeps stalling.
+- **Conflicted PRs are top priority.** `DIRTY` / `BEHIND` / `CONFLICTING` gets an agent
+  every tick until it's clean, ahead of everything else, and the PR goes back to draft
+  meanwhile — a conflicted PR is not reviewable, and offering it for review wastes your
+  time.
+- **It merges the base in; it never force-pushes your open PR.** Your inline review
+  comments stay anchored and your approval isn't dismissed by a rewrite.
+
+### Why the diff didn't match the scope
+
+The usual cause is a **squash-merged parent**. You squash-merge a stacked PR; GitHub
+deletes its branch and silently re-targets the child at the grandparent — but the child's
+branch still carries the parent's *original* commits. The same change now exists twice:
+git conflicts, and the PR shows the parent's files as if they were the child's. A 3-file
+task suddenly looks like a 40-file review.
+
+Cadence handles that explicitly. It detects the silent re-target, resolves those
+collisions **in the base's favour** (the parent's work already landed; the branch's copy
+is a stale duplicate), and then **checks the scope**: `git diff origin/<base>...HEAD
+--name-only` must contain only files this task legitimately touches. Foreign paths mean
+the resolution went wrong — it's fixed and re-checked before anyone is asked to review.
+The PR body carries `Files changed: N`, so a mismatch between the PR's stated scope and
+its diff is visible immediately, and a genuinely large diff has to explain itself.
 
 ---
 
@@ -553,7 +596,7 @@ sessions and nothing reliable can be reconstructed at the end. What it contains:
 | **What needed you** | every human touchpoint with **how long it waited** — decisions, approvals, parked reviewers |
 | **What went wrong** | defects with evidence, **Cadence's own included**: stalls, `waiting-for-merge` conversions, re-drafts after a PR was marked ready, review loops parked at 3 rounds, model escalations, blocked auto-merge guards, decisions that shipped unresolved |
 | **What went well** | fused fast paths, joins that unblocked early starts, one-round reviews, clean auto-merges |
-| **Flow health / Cost** | joins, rebases, conflicts, stalls, re-drafts · agent spawns by kind and model, ticks, quiet ticks |
+| **Flow health / Cost** | joins, base syncs, conflicts, conflict latency, scope-check failures, stalls, re-drafts · agent spawns by kind and model, ticks, quiet ticks |
 | **Timeline** | the merged event log, chronological, with quiet stretches collapsed |
 | **Feedback for the maintainer** | a copy-pasteable block: what worked, what hurt, what was missing — with links |
 
@@ -828,7 +871,7 @@ merged for you**, under any setting. Prefer clicking every button yourself? Set
 `approvalMergePolicy: "off"`.
 
 **I approved a PR, then it pushed a commit — will it still merge?** Only if that commit
-was a pure rebase or a comment/doc/formatting-only edit. Any change to logic, tests,
+was a base-sync merge or a comment/doc/formatting-only edit. Any change to logic, tests,
 config, dependencies, migrations, or CI makes your approval **stale**: it won't merge,
 it says so on the PR, and it re-requests your review. When it can't tell, it treats the
 approval as stale.
@@ -839,7 +882,7 @@ from the touch sets and serializes them across waves instead of running them in 
 **A blocker's PR isn't merged yet — is its dependent stuck?** No. Dependents start as
 soon as the blocker's *branch* exists: one blocker → the dependent stacks its PR on that
 branch; several blockers → it builds a **join branch** carrying all of them and works on
-top of that. Both rebase as their bases advance. Cadence flows, it doesn't gate on merges
+top of that. Both merge their bases in as those advance. Cadence flows, it doesn't gate on merges
 — and the per-tick flow audit treats "waiting for a merge" as a defect to fix, not a
 state to sit in.
 
@@ -897,6 +940,8 @@ it back to 180s on the next tick.
 | **Identity header** | the first line of every PR body: task id + what it does + cycle + plan PR + base |
 | **Cycle label** | `cadence:<slug>`, applied to every PR of the run so the PR list groups it |
 | **Cycle report** | `<runDir>/report.md` — the run's evidence file; `/cadence:report` renders it any time |
+| **Base sync** | merging an advanced base into a task branch (never a rebase, never a force-push on an open PR) |
+| **Scope check** | `git diff origin/<base>...HEAD` after a sync must show only this task's files |
 | **Idle-gating** | acting on a task only when it has no agent in flight |
 | **Complexity** | `high / medium / low / trivial`; set by the spec phase; drives model + review depth |
 | **Change detection** | one batched read-only GraphQL snapshot per tick; no delta → no agent spawned |
