@@ -9,7 +9,30 @@ Releases of the plugins in this marketplace. Versions are **per plugin** and tag
 
 ## Unreleased
 
-_(nothing yet — next batch lands here)_
+### cadence — planner: plan-doc fidelity
+
+From two live cycles in `pagana-catalog-apps` — a rich plan (14 tasks, 481 lines, 137
+requirement ids, balanced ledger) followed by a poor one (16 tasks, 178 lines, **zero**
+requirement ids, no ledger, ASCII graph, prose briefs). The instructions for all of it
+already existed; nothing forced them.
+
+- **Read the template before writing.** Step 5 now hard-requires reading
+  `references/cycle-plan-template.md` in full, and says plainly that the Output-shape
+  summary is an index, not a substitute.
+- **A brief is a field set, not prose** — Goal/done · Requirements covered · Creates ·
+  Edits · Reads · Shared surfaces · Blocks · Notes. Prose briefs break the requirement
+  ledger, the executor's scope check, and verify-and-extend. Hard-won detail belongs in
+  **Notes**, in addition to the fields.
+- **Pre-write gate:** five mechanical assertions before the file is written — R-ids per
+  brief, a balanced ledger, briefs carrying their fields, a `mermaid` graph with **no
+  box-drawing characters anywhere**, and template section order.
+- **Never compress the plan to save space** — length scales with task count; a short
+  plan for a large cycle is the symptom. Split the cycle instead.
+- **Mermaid only**, with a template example that demonstrates what tempted the ASCII:
+  wave subgraphs, labelled dashed conflict edges, multi-parent fan-in.
+
+Round recorded in `docs/feedback/20260729-plan-doc-fidelity.md`, including what was
+deliberately left unchanged.
 
 ---
 

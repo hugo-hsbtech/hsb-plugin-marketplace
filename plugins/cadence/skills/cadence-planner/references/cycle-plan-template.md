@@ -28,18 +28,42 @@
 
 ## 2. Dependency graph
 
+**Mermaid only.** Hand-drawn ASCII/box-drawing diagrams are a defect: they don't render
+on GitHub, they can't be diffed meaningfully, and — the real tell — they force the
+nuance out of the diagram and into a "notes on edges the diagram hides" paragraph
+underneath. Everything a complex graph needs is expressible here: labelled edges,
+dashed conflict edges, multi-parent fan-in, and a subgraph per wave.
+
 ```mermaid
 graph LR
+  subgraph W1[Wave 1]
+    T1[T1 · SNS foundation]
+    T3[T3 · consumer idempotency]
+  end
+  subgraph W2[Wave 2]
+    T2[T2 · topology provisioner]
+    T4[T4 · outbox relay]
+  end
+  subgraph W3[Wave 3]
+    T6[T6 · statement entity]
+  end
   T1 --> T2
   T1 --> T4
   T2 --> T6
   T4 --> T6
-  %% conflict edges (serialized, no logical order) shown dashed
-  T3 -.conflict: barrel export.-> T5
+  %% write-write conflicts: no logical order, serialized by decree — dashed + labelled
+  T3 -. "conflict: libs/messaging barrel" .-> T5[T5 · libs/cache]
+  %% a 2+-blocker task: show every parent edge, don't summarise them in prose
+  T9[T9 · statement consumer] --> T10[T10 · close job]
+  T5 --> T10
 ```
 
 Legend: solid edge = logical dependency (producer→consumer / declared);
-dashed `conflict` edge = no logical order, serialized to avoid a write-write clash.
+dashed `conflict` edge = no logical order, serialized to avoid a write-write clash;
+`subgraph` = wave. Label nodes with **id · what it does**, not the id alone.
+
+Anything the diagram genuinely can't carry (why an edge exists, what it costs) goes in
+the notes below it — but the *edges themselves* always live in the graph.
 
 **Cycles detected:** none. _(If any: list them and recommend merge/split — do not
 auto-break.)_
@@ -65,7 +89,10 @@ task in the previous wave has merged green.
 
 ## 4. Per-task context briefs
 
-> One self-contained brief per task so a fresh agent can start cold.
+> One self-contained brief per task so a fresh agent can start cold. **Every brief is
+> this field set** — Goal/done · Requirements covered · Creates · Edits · Reads ·
+> Shared surfaces · Blocks · Notes. Never a free-text paragraph, however good the
+> paragraph is.
 
 ### T1 — <title>
 - **Goal / done:** <acceptance criteria>
@@ -82,7 +109,12 @@ task in the previous wave has merged green.
 - **Reads / depends on:** <paths/modules>
 - **Shared surfaces touched:** <migrations / barrel exports / codegen / wiring>
 - **Blocks:** T2, T4
-- **Notes:** <gotchas, conventions, relevant CLAUDE.md skill to invoke>
+- **Notes:** <the hard-won detail from analysis — gotchas, positional test surfaces,
+  exact assertions to update, conventions, the repo skill to invoke. Write as much as
+  the task deserves. This is where dense prose belongs — **in addition to** the fields
+  above, never instead of them: a brief that is only a paragraph fails the pre-write
+  gate, because the ledger, the executor's scope check, and verify-and-extend all read
+  the *fields*.>
 
 ### T0 — prep(docs): 4 doc + comment fixes   ← a PREP BUNDLE
 - **Bundle class:** `docs` — no behavior change in any scope. (Classes never mix:

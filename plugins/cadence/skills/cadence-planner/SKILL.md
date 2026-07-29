@@ -260,6 +260,36 @@ Record the same `slug`, `task-id` (source key), and generated timestamp in the
 plan's metadata header (see the template) so the executor reads them from content,
 not by parsing the filename.
 
+**READ `references/cycle-plan-template.md` IN FULL BEFORE WRITING A SINGLE LINE OF THE
+PLAN.** Not "consult" — read it, then follow its section order and its per-section
+shapes exactly. The summary at the bottom of this file is an index, not a substitute:
+working from the summary alone is how a plan ends up with hand-drawn ASCII where the
+template mandates Mermaid, and prose blobs where it mandates field sets.
+
+> ### THE BRIEF IS A FIELD SET, NOT PROSE (the most expensive failure this file has)
+> A per-task brief is **structured fields** — Goal/done · **Requirements covered**
+> (R-id checklist with source anchors) · Creates · Edits · Reads/depends · Shared
+> surfaces · Blocks · Notes. Writing the same knowledge as one dense paragraph is a
+> **defect**, even when the paragraph is brilliant — and it usually is, because the
+> analysis was real. What the paragraph destroys is everything downstream that reads
+> the *fields*:
+> - **the requirement ledger** — no R-ids means no proof that nothing was dropped
+>   between the source and the plan, which is the entire point of Phase 1;
+> - **the executor's scope check** — it compares a PR's diff against the task's
+>   Creates/Edits touch set; prose gives it nothing to check, so diff pollution goes
+>   undetected;
+> - **verify-and-extend** — a spec agent can verify a field list against current code;
+>   it cannot verify a paragraph, so it re-derives the whole analysis and the cycle
+>   pays for it twice.
+>
+> Hard-won detail ("three test surfaces pin this positionally…", "hunt every `13`")
+> belongs in **Notes** — *in addition to* the fields, never *instead of* them.
+
+**Never compress the plan to save space.** Plan length scales with task count: 16 tasks
+means a longer document than 8, not a denser one. If it feels too big, that is a signal
+to **split the cycle**, not to thin the briefs — a short plan for a large cycle is the
+symptom this rule exists to catch.
+
 Use the template in `references/cycle-plan-template.md`. The plan MUST contain: the
 task table, the dependency graph (Mermaid), the wave schedule with parallel
 groupings, a per-task **context brief** (touch set + **Requirements covered**
@@ -279,19 +309,44 @@ requirements unaccounted, zero assigned twice. Emit the tally in the plan header
 count doesn't balance, a requirement is being dropped — find where it belongs and
 place it before emitting; never round the number to make it balance. This is
 enumerate-then-assign bookkeeping done *as you build the briefs*, not a separate
-review pass. Then STOP — do not implement.
+review pass.
+
+> ### PRE-WRITE GATE — run these assertions before the file is written
+> Mechanical, not advisory. Check each one against the text you are about to write; any
+> failure is fixed **before** writing, not noted afterwards.
+> 1. **Every task brief has an R-id checklist** with at least one `**T<id>.<n>**` entry,
+>    each carrying a source anchor. Zero R-ids anywhere in the document = stop.
+> 2. **The ledger balances and is in the header:**
+>    `assigned + deferred = inventoried`, `0 unaccounted`.
+> 3. **Every brief carries its fields** — Goal/done, Requirements covered, Creates,
+>    Edits, Blocks at minimum. A brief that is one paragraph of prose fails this.
+> 4. **The dependency graph section contains a ```mermaid block.** No hand-drawn
+>    diagrams: the document must contain **no box-drawing characters** (`─ │ ┌ ┐ └ ┘ ├
+>    ┤ ┬ ┴ ┼ ► ▼ ◄ ▲`) anywhere. If a graph feels too complex for Mermaid, that is what
+>    dashed conflict edges, edge labels, and wave subgraphs are for — see the template.
+> 5. **Section order matches the template**, and no mandated section is missing
+>    (tasks · graph · waves · briefs · conflicts · scope boundary · handoff).
+>
+> If you cannot satisfy one of these, say so explicitly in the plan and in your summary
+> — never emit a plan that quietly fails a gate.
+
+Then STOP — do not implement.
 
 ## Output shape (summary; full template in references/)
 ```
-TASKS           table: ID | title | source | deps
-GRAPH           mermaid DAG
+TASKS           table: ID | title | source | deps | bundle | confidence
+GRAPH           MERMAID ONLY (```mermaid graph LR) — dashed labelled edges for
+                write-write conflicts, subgraph per wave. ASCII art is a DEFECT.
 WAVES
   Wave 1 ║ parallel-safe ║ T1, T3, T5      ← all unblocked
   Wave 2 ║ parallel-safe ║ T2 (needs T1), T4
   Wave 3 ║               ║ T6 (needs T2,T4)
 CRITICAL PATH   T1 → T2 → T6   (3 cycles minimum)
 PREP BUNDLES    prep(<class>) tasks folding trivial same-class work into one PR (or "none")
-PER-TASK BRIEF  touch set + REQUIREMENTS COVERED (R-ids w/ anchors) + acceptance criteria
+PER-TASK BRIEF  FIELDS, never a prose paragraph:
+                  Goal/done · Requirements covered (R-id checklist + anchors) ·
+                  Creates · Edits · Reads/depends · Shared surfaces · Blocks · Notes
+                (hard-won detail goes in Notes, IN ADDITION to the fields)
 NOT DOING       scope boundary — excluded/deferred requirements + reason each
 LEDGER          N inventoried · N assigned · N deferred · 0 unaccounted
 CONFLICTS       serialized pairs + why
