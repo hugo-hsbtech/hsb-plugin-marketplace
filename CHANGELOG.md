@@ -49,6 +49,26 @@ run's durable state or the report rendered from it.
   unsafe, and a `low`-complexity task's Opus spec was serialised behind its blocker's
   entire implement + gate + self-review + PR write-up. "Exists" now explicitly means the
   ref is on the remote — not that it has commits.
+- **A plan doc can no longer act as a time machine for a retired topology.** A cycle-3
+  plan copied its handoff law from the **cycle-1** doc — skipping cycle 2 entirely — and
+  shipped "ZERO or 2+ blockers → base = integration and wait for convergence" plus "NO
+  join branches", putting six of sixteen tasks (four on the critical path) behind the
+  human's merge button, in a document whose own handoff section opened by declaring that
+  the executor never gates on merges. Because the executor pins the plan's topology over
+  its own default, that would have been adopted as intentional.
+  **Planner:** the branching law comes from the skill, freshly, every time — previous
+  plan docs are precedent for *analysis*, never for topology; no "carry-over"
+  justifications; and a plan whose schedule contradicts its own "does not gate on
+  merges" sentence is invalid. **Executor:** "the plan wins" still governs how a base is
+  derived from blockers, but a plan carrying any of the three retired shapes (a merge as
+  a start condition, a join ban, "rebase the dependent") is now **surfaced as a blocking
+  question at run open** with the frozen tasks named — `incident` kind `topology.stale` —
+  instead of pinned.
+- **The dependency graph is Mermaid, and ASCII art is a defect.** The rule existed as
+  one line in the output-shape block and was violated by the same plan, which drew a
+  15-line ASCII diagram and put the real edges in prose underneath. Now a guardrail with
+  the reasoning: dashed **labelled** conflict edges are how the shared surfaces reach the
+  human on the plan PR, and ASCII carries no labels.
 - **"State the rule, never the derived number" now covers stale observations.** The
   orchestrator told a task the compose `db` container was running: true when measured,
   false when used. A number you computed and a state you observed fail identically, so

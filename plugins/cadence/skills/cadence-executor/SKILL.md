@@ -391,6 +391,26 @@ already recorded in state. Four tasks' work merged somewhere the cycle could not
   document — record `topology.source = "plan"` with the conflicting skill rule
   alongside it, log a `policy.pinned` event, and say so in one line at run open. Only
   the user resolves it the other way.
+- **But a plan that gates on MERGES is a defect, not a topology — ASK, never pin it.**
+  "The plan wins" covers *how a base is derived from blockers*. It does not license a
+  plan to suspend the one rule the executor exists to enforce. So before pinning, read
+  what the plan actually says and check it for the three retired shapes:
+  **(a)** any task whose start condition is another task's PR being **merged**
+  ("waits for convergence", "after X is merged into integration", "merge T<n> first");
+  **(b)** an explicit ban on join branches (2+ blockers sent to integration *to wait*);
+  **(c)** "rebase the dependent" as the base-sync method.
+  Each of those was the *correct* rule under an earlier version, which is exactly why
+  they reappear — a planner copying an old cycle's plan doc reproduces them verbatim,
+  and the "plan wins" rule then adopts them as deliberate. Observed: a cycle-3 plan
+  carried cycle-1's law forward (skipping cycle 2 entirely) and put six of sixteen
+  tasks — four on the critical path — behind the human's merge button, in a document
+  whose own handoff section opened by declaring that the executor never gates on merges.
+  **So: do not pin, and do not silently override.** Stop at run open, state the specific
+  clauses and the tasks they freeze, log an `incident` (`kind: "topology.stale"`), and
+  ask the user which they want — the plan as written, or the current model. This is one
+  of the few genuinely blocking questions in the skill, because both answers are
+  expensive and only the human can pick. Everything else in the plan's topology still
+  wins by default.
 - **On resume, re-assert before dispatching anything.** If the topology you are about
   to apply differs from `run.json.topology`, that is the upgrade drifting under a live
   run: **keep the pinned one**, log an `incident` (`kind: "topology.skew"`), and put it

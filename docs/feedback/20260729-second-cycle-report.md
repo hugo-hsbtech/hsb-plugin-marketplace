@@ -266,3 +266,81 @@ Recorded because it is the comparison baseline for the next round:
 
 All five accepted findings are prose/rule edits to `cadence-executor` and its references;
 no plan-doc, state-schema, or planner↔executor contract change. **MINOR** bump.
+
+---
+
+## Addendum — cycle-3 plan doc (PR #73), same session
+
+Not from a cycle report: the user brought
+[`pagana-catalog-apps#73`](https://github.com/pagana-platform/pagana-catalog-apps/pull/73),
+the plan PR for cycle 3, before shipping it. Two further findings, both verified against
+the doc and both fixed in this same `Unreleased` batch.
+
+### F6 — A plan doc can act as a time machine for a retired topology · **FIXED**
+
+**Symptom.** `docs/plans/proposed/20260729-0357-…-c3-…-cycle.md` §7.3 read:
+
+> **Dependencies by PR base (§7 law, cycle-1/2 carry-over):** … ZERO or 2+ blockers →
+> base = integration branch and **wait for convergence** … **NO join branches** (they
+> stranded four tasks in cycle 1).
+
+with matching clauses in §3's preamble and §7's opening. Six of sixteen tasks (T7, T8,
+T10, T13, T15, T16) had 2+ blockers, so all six were scheduled to wait on a human merge —
+including T8, T10, T15 and T16, which are four consecutive nodes of the declared critical
+path `T1 → T6 → T8 → T9 → T10 → T15 → T16`. §7 opened by stating *"The executor **flows —
+it does not gate waves on merges**"* and exempted those six in the same sentence.
+
+**Evidence.** PR #73, file
+`docs/plans/proposed/20260729-0357-voucher-phase2-c3-sync-notifications-cycle.md`, §3
+line 68, §7 line 165, §7.3 line 169 (pre-fix). Provenance confirmed by diffing against
+the **cycle-1** plan doc `20260728-1527-…-c1-…-cycle.md` §7.3 on `main`, which reads
+"Zero or 2+ blockers → base = the integration branch" — correct for the version c1 ran
+under. Cycle 2's plan, which ran joins successfully, was skipped entirely. The label
+"cycle-1/2 carry-over" is the planner's own.
+
+**Traces to.** Nothing in `cadence-planner/SKILL.md` forbade sourcing branching law from
+a prior plan doc (grepped: no guard on precedent). Amplified by
+`cadence-executor/SKILL.md:388-393` — "the plan doc wins" — which would have pinned it as
+`topology.source = "plan"` and logged it as deliberate.
+
+**Class.** Missing capability (planner) + behavior defect (executor pins too broadly).
+
+**Changed.** Planner: a `THE TOPOLOGY YOU EMIT IS THIS SKILL'S, NEVER A PREVIOUS
+CYCLE'S` block — prior plans are precedent for analysis, never for branching law; no
+"carry-over" or prior-incident justifications in the handoff; and a plan whose schedule
+contradicts its own "does not gate on merges" sentence is invalid. Executor: "the plan
+wins" is narrowed to *how a base is derived from blockers*; a plan carrying any of the
+three retired shapes — a merge as a start condition, a join ban, or "rebase the
+dependent" — is now a **blocking question at run open** naming the frozen tasks, logged
+as `incident` kind `topology.stale`, rather than pinned.
+
+**Also fixed in the doc itself** (pushed to the PR branch as `554c607`): the join
+topology restored with "PR targets integration, never the join"; the four
+wait-for-convergence clauses removed; "rebase the dependent" (8 occurrences) replaced
+with merge-the-base-in; and "Merge T14's PR first among wave 1" replaced by T1/T2
+stacking on T14's branch, since T14's conflict edges are edges like any other. The
+analysis, per-task briefs, conflict law and scope boundary were not touched.
+
+### F7 — The dependency graph was ASCII art · **FIXED**
+
+**Symptom.** Same doc, §2: a 15-line ASCII box-drawing diagram with the real edges in a
+prose list underneath. The cycle-1 doc the user cites as the format to keep uses
+` ```mermaid graph LR ` with dashed **labelled** conflict edges, a legend and an explicit
+cycle check.
+
+**Traces to.** The rule existed — `cadence-planner/SKILL.md:381-382`, *"GRAPH — MERMAID
+ONLY … ASCII art is a DEFECT"* — but only as one line inside the output-shape block,
+with no reasoning attached.
+
+**Class.** Behavior defect (rule present, ignored).
+
+**Changed.** Promoted to a Guardrail with the reasoning: dashed labelled edges are how
+the conflict surfaces reach the human on the plan PR, ASCII carries no labels, and a
+graph too tangled for Mermaid is a signal the tasks are over-coupled. The doc's §2 was
+rewritten to Mermaid in cycle 1's style.
+
+> **Note on D1 above.** F7 is the second instance this session of "the rule exists and
+> was ignored" (D1 was the first, and was declined on the grounds that a second copy of
+> an instruction is not enforcement). The difference: D1's rule was already stated at
+> full strength with its failure mode attached, whereas F7's was a bare four-word clause
+> in a format block. Adding the *reasoning* is a real change; adding a duplicate is not.

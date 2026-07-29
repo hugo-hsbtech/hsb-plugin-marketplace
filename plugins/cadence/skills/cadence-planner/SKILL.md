@@ -396,9 +396,38 @@ CONFLICTS       serialized pairs + why
 HANDOFF         "Dispatch tasks as their base branches appear and FLOW — don't gate
                 a wave on the previous wave merging. A task with one blocker stacks
                 its PR on that blocker's branch; a task with 2+ blockers gets a join
-                branch (integration + all blockers) so it starts too; no blockers →
-                base = integration."
+                branch (integration + all blockers) so it starts too, and its PR
+                TARGETS INTEGRATION, never the join; no blockers → base =
+                integration. A base branch counts as available the moment it EXISTS
+                on the remote — empty counts. Base syncs MERGE the base in; never
+                rebase, never force-push an open PR."
 ```
+
+> #### THE TOPOLOGY YOU EMIT IS THIS SKILL'S, NEVER A PREVIOUS CYCLE'S
+> The executor **pins the plan doc's topology over its own default** — the human read
+> and approved that document — so whatever branching law you write here becomes the law
+> for the whole run. That makes a copied topology a **time machine**: an old plan doc in
+> `docs/plans/` can silently re-impose a model the executor retired versions ago, and the
+> executor will adopt it as intentional and log it as such.
+>
+> It has already happened. A cycle-3 plan copied its §7 handoff from the **cycle-1** doc
+> — skipping cycle 2 entirely — and shipped *"ZERO or 2+ blockers → base = integration
+> and **wait for convergence**"* plus *"**NO join branches** (they stranded four tasks in
+> cycle 1)"*. That put six of sixteen tasks, including four on the critical path, behind
+> a human's merge button, in a document whose own §7 opened by declaring that the
+> executor never gates on merges. The justification was stale too: cycle 1's stranding
+> came from task PRs being **merged into** joins, not from joins existing — the corrected
+> model ran clean in cycle 2 (2 joins built, 2 retired, 0 stranded, 0 recovery PRs).
+>
+> So: **read previous plan docs for ANALYSIS — touch sets, conflict surfaces, what bit
+> last time — and never for BRANCHING LAW.** The base-derivation rule, the wave dispatch
+> condition, and the sync method come from *this skill*, freshly, every time. If a prior
+> plan's topology differs from what you are about to write, that is not evidence you are
+> wrong; it is evidence that plan is old. Never write "carry-over", "as in cycle N", or a
+> justification sourced from a previous cycle's incident into the handoff section — cite
+> the rule, not the history. And **never emit a plan whose §Handoff contradicts its own
+> opening sentence**: if you have written "the executor flows and does not gate on
+> merges", no task in the schedule may have a merge as its start condition.
 
 ## Guardrails
 - **Plan only.** Never start implementing tasks or dispatch worker agents. The
@@ -416,6 +445,16 @@ HANDOFF         "Dispatch tasks as their base branches appear and FLOW — don't
   with everything in its area (serialize) until clarified.
 - **Stable IDs.** Reuse the same task IDs in every section so the handoff agent can
   cross-reference.
+- **The graph is Mermaid, always — ASCII art is a DEFECT, not a style choice.** A
+  ```` ```mermaid graph LR ```` block with solid edges for producer→consumer, **dashed
+  labelled** edges for write-write conflicts (`-."conflict: <the shared file>".->`), a
+  legend, and an explicit cycle check. It renders on the plan PR, which is where the
+  human goes to understand the shape of the cycle; ASCII renders as a wall of box glyphs
+  nobody can follow, and its edges carry no labels, so the conflict surfaces vanish. One
+  production plan drew a 15-line ASCII diagram and put the real edges in a prose list
+  underneath — the information was there and unreadable. If the graph is too tangled to
+  express in Mermaid, that is a signal the tasks are over-coupled, not a licence to draw
+  it by hand.
 - **Don't invent dependencies** from vibes — every edge must trace to a declared
   link, a producer→consumer relationship, or a concrete shared file.
 - **Lose no requirement.** The plan is a completeness contract, not a summary. Every
