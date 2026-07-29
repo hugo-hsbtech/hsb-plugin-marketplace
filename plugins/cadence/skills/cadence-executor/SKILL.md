@@ -385,6 +385,23 @@ already recorded in state. Four tasks' work merged somewhere the cycle could not
   for 0 / 1 / 2+ blockers, plus `source: "skill" | "plan"`. It is pinned exactly like
   the merge policy: a resumed run keeps the topology it opened with, whatever version
   is installed now.
+- **RE-READ THE PLAN FROM DISK AT PIN TIME, AND RECORD THE SHA YOU READ.** Pin from the
+  file, never from a copy of it in your context. Plan docs get corrected — often minutes
+  before a run, precisely because someone reviewed them — and the copy you were handed
+  earlier in the session is not the document the human approved. So at pin time:
+  `git rev-parse HEAD` on the branch you read from, re-read the plan file itself, and
+  write `topology.planSha` + `topology.planReadAt` alongside the rule. Quote the plan's
+  §-number and its **exact live text** in the `policy.pinned` event, so the pin can be
+  audited against the file later.
+  > This is not hypothetical: a run pinned `"NO join branches"` at open, quoting the plan
+  > §7.3 — from a **stale draft held in context**. The live document, committed **~2
+  > minutes before the run opened**, mandated per-task joins and said in terms *"Do not
+  > re-import cycle 1's NO join branches conclusion from an older plan doc; it is
+  > superseded."* The pin was wrong, was logged as deliberate, and was only undone because
+  > **three spec agents independently refused their briefs** and cited the file. Three
+  > agents doing the orchestrator's reading for it is not a safety net — it is the same
+  > verification discipline being asked to compensate for a read that should never have
+  > been stale. One `git rev-parse` + one re-read prevents it.
 - **The plan doc wins, and a disagreement is surfaced, never resolved silently.** If
   the plan doc states a topology (a "branching"/"topology"/§-numbered base rule) that
   differs from this skill's, take the **plan's** — the human read and approved that
@@ -462,9 +479,54 @@ Acting on the PR during an in-flight round-trip is wasted work and races the pus
   nothing to react to on a PR it just created. The first monitor happens on a later
   idle tick. (Likewise a fix agent finishes its push+reply and returns; the re-check
   is the next idle tick.)
-- **Stale-lease guard:** if `agentInFlight` has been set past a max lease (e.g. ~30m)
-  with no completion, treat the agent as dead — inspect the worktree, reconcile
-  status from git/PR reality, and allow a fresh spawn.
+- **Stale-lease guard — EVIDENCE, NOT ELAPSED TIME.** See the reality-check rule below;
+  it runs every tick, before the spawn decision.
+
+> #### `agentInFlight` IS A CLAIM, NOT A FACT — RECONCILE IT AGAINST REALITY EVERY TICK
+> Idle-gating skips any task with `agentInFlight = true`, so **a task whose flag is set
+> but whose agent was never spawned is invisible forever.** A recorded-but-unspawned
+> agent and a running one look identical from the flag alone, and the flag is written by
+> you, which means a single bookkeeping slip removes a task from the run silently.
+>
+> It cost ~6h of critical path in production. A task was written to state as
+> `implementing` / `agentInFlight: true` — **and the `Agent` call was never issued.** Its
+> branch sat empty at the base commit, idle-gating skipped it on every one of ~30 ticks,
+> and **two dependents were blocked the entire time**. It was caught only when someone
+> noticed it had outlasted every sibling implement. The bookkeeping failed in the
+> **opposite** direction in the same run too: two spec agents were **spawned but never
+> recorded**, so the spawn census was wrong in both directions at once.
+>
+> So, **every tick, before deciding what to spawn**, reconcile each `agentInFlight: true`
+> task against something the agent would have *had* to change:
+>
+> - its **branch head moved** on the remote (`refSnapshot`), **or**
+> - its **`tasks/<id>.json` mtime advanced**, **or**
+> - its **PR changed** (`prSnapshot` delta).
+>
+> **One full tick with `agentInFlight: true` and none of those three** → the agent is not
+> there. Log an `incident` (`kind: "orchestrator.lost-dispatch"`), reconcile the task's
+> real status from git/PR (never from the flag), clear `agentInFlight`, and let it be
+> dispatched normally next tick. Do this on **evidence, not a clock**: a 30-minute
+> stopwatch neither catches a slow-but-live agent correctly nor a dead one quickly, and
+> the failure above survived six hours of them.
+>
+> **Write the flag from the spawn, never in anticipation of it.** Set `agentInFlight`
+> (+ `agentKind`, `agentStartedAt`) *after* the `Agent` call is actually issued, in the
+> same breath as the `task.spawn` event — never as part of preparing to dispatch. A flag
+> set before the call is exactly the state that stranded the task above.
+>
+> **And reconcile the other direction:** if a task shows progress (branch moved, file
+> written, PR opened) while `agentInFlight` is `false` and you logged no `task.spawn`,
+> that is an unrecorded spawn — log the `incident`, back-fill the event, and say so in the
+> report's cost section rather than letting the census quietly disagree with itself.
+>
+> **A lost dispatch is also a STALL — put it in `run.json.stalls`, not only in
+> `incidents`.** The six-hour freeze above was recorded twice as an incident and **never
+> once as a stall**, so the ledger a reader consults to find out what held the run up
+> listed only a legitimate `awaiting-human-review` entry and omitted the run's single
+> biggest delay. Any task that goes a tick without advancing for a reason that is *not*
+> legitimate (see the Flow audit) belongs in `stalls` with its reason, whatever else it
+> also gets logged as.
 
 > Why re-spawn each tick instead of one long-lived agent: monitoring spans days and
 > must survive session death, but an agent only lives for one turn. `ScheduleWakeup`
@@ -807,7 +869,39 @@ is set may step 1 run.
    to its issue key/id/url and record under `issueTracker` + per-task `issue`. Also
    discover and cache the project's **workflow state names** so the sync maps to real
    states, not guesses. If linked but the tracker is read-only/unreachable, STOP.
-6. **Stamp the gate.** Only when 1–5 all pass, set `preflight.passedAt` and proceed.
+6. **Probe the two capabilities the run's quality loop depends on — don't assume them.**
+   Neither blocks the run; both change how it behaves, and both were rediscovered the
+   expensive way in production. Record the result and the fallback, announce them **once**
+   at run open, and never re-litigate them per task.
+   - **Can anyone actually be requested as a reviewer?** GitHub **silently refuses to add
+     a PR's own author as a reviewer**: `gh pr edit <n> --add-reviewer <login>` returns
+     **exit 0** and leaves `reviewRequests: []`. When `ghLogin` is also the PR author —
+     the normal case for Cadence, which opens every PR with its own token — the review
+     loop is **structurally inert**. In one run this produced **seventeen PRs with
+     `reviewRequests: []`, `reviews: []`, and `reviewDecision: ""`**, every one of which
+     the run described as "awaiting review" when nothing could ever arrive. So: determine
+     the intended reviewer(s) and record `preflight.reviewers` as `"ok"` (someone other
+     than `ghLogin` can be requested), or `"self-only"` with the reason. When
+     `"self-only"`, **say so once at run open and never again describe a PR as awaiting
+     review** — it is awaiting the human's *merge*, which is a different and honest
+     sentence. Never trust `--add-reviewer`'s exit code: verify `reviewRequests` after
+     the call, and log a `guard.blocked` if it stayed empty.
+   - **Is `/code-review` invocable by an agent?** It may carry `disable-model-invocation`
+     in this environment, in which case no agent can call it. Probe once and record
+     `preflight.codeReview = "ok" | "unavailable"` with the fallback (a delegated
+     subagent reading the branch diff, scaled the same way by `complexity`). In one run
+     **thirteen separate tasks each rediscovered this independently**, each burning spec
+     time on the same dead end. One probe, one recorded fallback, relayed in every brief.
+7. **Stamp the gate.** Only when 1–6 all pass, set `preflight.passedAt` and proceed.
+
+> **A preflight fact is only true where it was measured.** `preflight` is captured in the
+> **main checkout**, but task agents work in **fresh worktrees**, and anything gitignored
+> does not exist there. `graphify: ok` was recorded from the planning worktree while
+> `graphify-out/` is gitignored, so every task agent found no graph — caught independently
+> by two spec agents, and the briefs kept promising graph queries until it was corrected
+> mid-run. So: for any preflight fact that depends on **untracked or gitignored** state,
+> record **where** it holds (`preflight.graphify = "main-checkout-only"`) rather than a
+> bare `ok`, and never relay it into a brief as though it were true in the worktree.
 
 **Re-verification is scoped, not per-tick:** re-verify the gate (auth/MCP can drop
 between sessions) only at the start of a wakeup that is about to **dispatch new
@@ -1047,6 +1141,29 @@ was in fact spawning dozens of agents. There is no such thing as an unlogged spa
 > - ✅ "This task needs a live Postgres — bring up compose `db` yourself and confirm it
 >   before you rely on it." · ✅ "Check the branch's contents yourself; do not assume."
 >
+> **A RELAYED "GOTCHA" MEETS THE SAME EVIDENCE BAR AS A PR CLAIM.** Harvesting a lesson
+> from one agent and broadcasting it to the rest is one of the most valuable things the
+> orchestrator does — and it multiplies a wrong one by the number of agents you send it
+> to. So every entry you relay carries **the command that proved it, or a `file:line`**.
+> No provenance, no broadcast: keep it, label it `unverified`, and say who reported it.
+>
+> In production a gotcha was relayed to **every remaining implement brief** claiming that
+> `--testPathPattern` is ignored by the integration jest project. It is exactly backwards
+> — the *positional path* is what that project ignores. The failure mode is the dangerous
+> kind: a run that quietly executes the **whole** project instead of one file **reads as a
+> pass**. A sibling gotcha in the same run had the same shape (`jest -t` takes a regex, so
+> a plain-text `-t 'notification delivery (C3 T7)'` matched nothing, ran **zero** tests,
+> and reported all-skipped — also green). Both were caught by an agent re-running the
+> commands three ways rather than believing the brief.
+>
+> Two rules fall out, and both belong in the briefs you write: **prefer a gotcha that
+> names a command over one that states a conclusion** ("run X and read the tail line" beats
+> "X is ignored"), and **an all-green result is not evidence a test ran** — check the
+> reported suite/test counts, and the tail line `Ran all test suites matching /…/` versus
+> a bare `Ran all test suites.` A gotcha you later discover is wrong is an `incident`
+> (`kind: "orchestrator.false-gotcha"`) **and** a correction pushed to every agent that
+> received it — silently dropping it leaves the wrong version in flight.
+>
 > If you *must* pass on a number **or an observation** (from a plan, a prior agent, a
 > report), label it **unverified**, name its source **and when it was observed**, and
 > instruct the agent to verify before relying on it. An agent that finds a brief's claim
@@ -1154,6 +1271,35 @@ After the tick's per-task agents return, the top orchestrator does only bookkeep
   summary **leading with the report's absolute path**, send the one completion
   notification, and **omit ScheduleWakeup**. The run is complete.
 
+> #### FLUSH STATE BEFORE YOU RUN OUT OF ROOM — the last writes are the ones that get lost
+> The end of a run is exactly when your context is longest and the pending writes are
+> most valuable, so they are the writes most likely never to happen. In production the
+> orchestrator's context ran down at precisely that point and the run's state froze
+> mid-truth: **six task files still read `status: "open"` with `mergedAt: null` for PRs
+> that had merged**, `prSnapshot` still called the plan PR a draft after it had been
+> un-drafted, and `exitVerdict.caveat` still said *"no task PR has merged"* on a cycle
+> where all sixteen had. The report had to reconstruct six tasks' outcomes from GitHub —
+> which is precisely what the state files exist to make unnecessary.
+>
+> - **Reconcile-and-flush is a step, not a hope.** Before the final summary — and again
+>   on **any** tick where you notice your own context getting long — do a reconcile pass:
+>   every task whose PR has merged must have a task file saying so (spawn its monitor
+>   agent to write it; **you still never write task files yourself**), `prSnapshot`
+>   re-baselined against the live snapshot, `attention`/`stalls`/`exitVerdict` rebuilt,
+>   and any caveat that time has falsified rewritten. **Then** render the report.
+> - **Render the report EARLY rather than perfectly.** A report written while there is
+>   room to write it beats a better one that never gets rendered. If the run is close to
+>   done and your context is long, render `<runDir>/report.md` now, marked `IN FLIGHT`,
+>   and refresh it at the end condition.
+> - **An agent that stops early is an EVENT, not a note.** Context exhaustion is a real,
+>   countable failure mode: log an `incident` with `kind: "agent.exhausted"` naming the
+>   task, the agent kind, what it had written, and whether it was respawned — for your own
+>   context too. In production one cleanup agent was respawned after exhausting its
+>   context and the orchestrator nearly did the same, but both survived only as free-text
+>   `tick.note`, and two further suspected instances had to be reported `not captured`
+>   because nothing countable existed. A failure mode with no event kind cannot be
+>   measured, and therefore cannot be fixed.
+
 ## Per-task orchestrator agent (summary — full playbook in references/task-agent.md)
 The top orchestrator spawns this agent for an **idle** task with work. It reads
 `references/task-agent.md` first and follows it exactly. In brief: it resumes from
@@ -1206,6 +1352,31 @@ event: `{ts, actor, kind, detail, pr?, url?, sha?, model?}`.
 > **GitHub's timestamps are authoritative** where both exist. When you record an event
 > that GitHub also stamps (a merge, a PR open, a review), prefer the value from `gh`
 > over your own `date -u`, and never mix the two sources inside one duration.
+>
+> **Never write a placeholder timestamp.** `00:00:00Z` is not "unknown", it is a lie the
+> renderer will happily compute durations from — one run stamped an entire spec block and
+> a join/branch block at `00:00:00Z`–`00:00:07Z`. If you truly cannot get a time, omit the
+> field; a missing `ts` renders `not captured`, a fake one renders a wrong number.
+
+> #### ONE EVENT = ONE LINE, WRITTEN WHOLE
+> The log is only append-only if each append is a complete line ending in a newline.
+> A partial write followed by another write puts **two JSON objects on one physical
+> line**, and that is not a cosmetic defect: **strict parsers abort there.** In production
+> exactly one such line existed — a truncated tick note followed by a complete rewrite of
+> the same tick — and `jq` exited 5 at that point and **silently dropped the 11 events
+> after it**. Eleven events that were correctly captured, correctly written, and
+> unreadable. So: compose the whole JSON object first, append it with its trailing
+> newline in one operation, and never edit or re-write a line you already appended — a
+> correction is a **new** line, not a patched one.
+>
+> **Reconcile your two spawn ledgers, or don't publish either.** `tick.spawns` counters
+> and `task.spawn` events must describe the same run: one production run logged **16**
+> `task.spawn` events against `tick.spawns` totalling **51**, a threefold disagreement
+> that made the whole cost section unrenderable. They diverge when a spawn is counted in
+> the tick line but never gets its own event — so emit the event **first**, then
+> increment the tick counter from the events you actually wrote. If they still disagree
+> at render time, report **both numbers and the discrepancy**; never pick the flattering
+> one and never average them.
 
 **`run.json` and `tasks/<id>.json` are overwritten in place — they say what is true
 now, never what happened. The event log is the ledger, and it is the only one.** So:
@@ -1262,7 +1433,7 @@ wake-up. The rendering rules and the task-agent kinds are in
 > | `escalation` | a task is re-spawned a model tier up, or a stale lease is recovered |
 > | `task.failed` | a task is given up on, with the blocker |
 > | `tick` | **every** wake-up, quiet ones included |
-> | `incident` | **anything Cadence got wrong** — sub-`kind`: `brief.false-premise` · `topology.skew` · `task.collision` · `orchestrator.error` · `external.merge` · `contract.mismatch` · or a new sub-kind naming what it actually was |
+> | `incident` | **anything Cadence got wrong** — sub-`kind`: `brief.false-premise` · `orchestrator.false-gotcha` · `orchestrator.lost-dispatch` · `agent.exhausted` · `topology.skew` · `topology.stale` · `preflight.stale` · `task.collision` · `orchestrator.error` · `external.merge` · `contract.mismatch` · `scope.widened` · or a new sub-kind naming what it actually was |
 >
 > The task agents own the rest (`pr.*`, `review.*`, `ci.*`, `decision.*`, `automerge`,
 > `merged`, `conflict*`, `scope.*`, `join.*`, `handoff.written`, `branch.published`,

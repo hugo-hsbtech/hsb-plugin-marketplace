@@ -9,14 +9,37 @@ Releases of the plugins in this marketplace. Versions are **per plugin** and tag
 
 ## Unreleased
 
-### cadence — the log the report is rendered from
+_Nothing yet._
 
-Feedback from the second real cycle (`voucher-phase2-c2-statements-dashboards`, 16 tasks,
-16 merged, 0 failed, 4h 16m). The cycle **opened under 3.6.0** and was upgraded to
-3.11.0 mid-run, so most of its capture complaints were already fixed before the report
-was written — see `docs/feedback/20260729-second-cycle-report.md` for what was declined
-and why. What survived verification is five defects, all of which corrupted either the
-run's durable state or the report rendered from it.
+---
+
+# cadence
+
+## 3.13.0 — 2026-07-29
+
+### cadence — trust nothing you didn't measure
+
+**Three feedback rounds in one release**, from two real cycles run back to back:
+`voucher-phase2-c2-statements-dashboards` (16/16 merged, 4h 16m) and
+`voucher-phase2-c3-sync-notifications` (16/16 merged, 6h 36m), plus a defect caught in
+c3's plan doc before it shipped. Rounds recorded in
+`docs/feedback/20260729-second-cycle-report.md` and
+`docs/feedback/20260729-third-cycle-report.md`, including what was **declined** and why —
+c2 opened under 3.6.0, so several of its loudest complaints were about a version that no
+longer existed.
+
+The through-line: every defect below is the orchestrator asserting something it had not
+measured — a flag it wrote itself, a plan copy it held in context, a gotcha it relayed
+unproven, a capability it assumed, a clock it invented. c3's own report puts it best:
+*"the verification discipline worked, the orchestrator's assertions did not."* Seven false
+orchestrator claims were caught by agents checking against the tree, two of which would
+have shipped silent runtime defects invisible to typecheck and to CI.
+
+**What this release confirms works** (c3 ran with the first round's fixes live): every
+anomaly was logged as an `incident` with a real sub-kind, where c2 invented
+`cadence.defect`; 50 ticks logged, against zero in c2; 16/16 PRs held draft until CI was
+terminal-and-green with zero re-drafts; and the join topology produced **six joins, twelve
+merge operations, zero conflicts**, including a fifteen-branch join for the exit gate.
 
 - **The event-kind vocabulary is closed, and it is now visible where events are written.**
   The orchestrator invented `cadence.defect`, `merge.executed`, `policy.skew` and
@@ -69,6 +92,54 @@ run's durable state or the report rendered from it.
   15-line ASCII diagram and put the real edges in prose underneath. Now a guardrail with
   the reasoning: dashed **labelled** conflict edges are how the shared surfaces reach the
   human on the plan PR, and ASCII carries no labels.
+- **Dispatch integrity: `agentInFlight` is reconciled against reality every tick.** A task
+  was written to state as `implementing` / `agentInFlight: true` and **its `Agent` call was
+  never issued** — idle-gating then skipped it through ~30 ticks, its branch sat empty at
+  the base commit, two dependents were blocked, and **~6h of critical path was lost** before
+  anyone noticed it had outlasted every sibling implement. The same run failed in the
+  opposite direction, spawning two spec agents it never recorded. The stale-lease guard
+  existed but was a passive ~30m stopwatch in an aside. It is now an evidence check in the
+  per-tick path: an in-flight task must show a moved branch head, an advanced task-file
+  mtime, or a changed PR — none for a full tick → `incident` (`orchestrator.lost-dispatch`),
+  reconcile from git/PR, clear the flag. The flag is now written **from** the spawn rather
+  than in anticipation of it, and a lost dispatch lands in `stalls`, not only `incidents`.
+- **Pins are read from the plan on disk, and the SHA is recorded.** A run pinned
+  `"NO join branches"` quoting plan §7.3 — from a **stale draft held in context**. The live
+  document, committed ~2 minutes before run open, mandated per-task joins and said in terms
+  that the older conclusion was superseded. The wrong pin was logged as deliberate and undone
+  only because **three spec agents refused their briefs and cited the file**. Pin time now
+  re-reads the plan and records `topology.planSha` / `topology.planReadAt`.
+- **Preflight probes the quality loop instead of assuming it.** GitHub silently refuses to
+  add a PR's own author as a reviewer — `gh pr edit --add-reviewer <self>` returns **exit 0**
+  and leaves `reviewRequests: []` — so with `ghLogin` == author (Cadence's normal case) the
+  review loop is structurally inert; one run produced **seventeen PRs it called "awaiting
+  review"** when nothing could ever arrive. Now recorded as `preflight.reviewers`, and under
+  `self-only` such a PR is never again described as awaiting review. `/code-review`
+  invocability is probed once too (**thirteen tasks** rediscovered `disable-model-invocation`
+  independently). And a preflight fact resting on gitignored state records *where* it holds:
+  `graphify: ok` was measured in the main checkout while `graphify-out/` is gitignored, so
+  every fresh worktree had no graph.
+- **A relayed gotcha meets the same evidence bar as a PR claim.** A gotcha was broadcast to
+  *every remaining implement brief* claiming `--testPathPattern` is ignored by a jest
+  project — the **positional path** is what that project ignores. The failure mode is the
+  dangerous kind: a run that quietly executes the whole project instead of one file **reads
+  as a pass**. Relayed entries now carry the command or `file:line` that proved them, plus
+  two standing rules: prefer a gotcha naming a command over one stating a conclusion, and
+  **an all-green result is not evidence a test ran**.
+- **Flush state before running out of room.** An orchestrator's context ran down exactly
+  when the closing writes were due, freezing state mid-truth: six task files still read
+  `status: "open"` for merged PRs, `prSnapshot` still called the plan PR a draft, and
+  `exitVerdict.caveat` still said "no task PR has merged" on a cycle where all sixteen had.
+  Reconcile-and-flush is now a step, the report is rendered early rather than perfectly, and
+  an agent stopping early is a countable `incident` (`agent.exhausted`) instead of a
+  free-text `tick.note`.
+- **Ledger integrity.** One event = one line, written whole: a partial write followed by
+  another put two JSON objects on one physical line, `jq` exited 5 there and **silently
+  dropped the 11 events after it**. Placeholder `00:00:00Z` timestamps are banned (omit the
+  field instead — a missing `ts` renders `not captured`, a fake one renders a wrong number).
+  And the two spawn ledgers must reconcile: one run logged **16** `task.spawn` events against
+  `tick.spawns` totalling **51**, which made the whole cost section unrenderable.
+
 - **"State the rule, never the derived number" now covers stale observations.** The
   orchestrator told a task the compose `db` container was running: true when measured,
   false when used. A number you computed and a state you observed fail identically, so

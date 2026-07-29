@@ -90,7 +90,7 @@ event the moment it happens, not at the end:
 | `guard.blocked` | an auto-merge guard held the merge back (which guard, why) | merge health |
 | `automerge` | the agent merged under an approval (`authorizedBy`, `approvedSha`→`mergedSha`, `headDelta`) | outcome |
 | `merged` | the PR merged (by whom) | outcome |
-| `incident` | **Cadence got something wrong** (`kind`: `brief.false-premise` \| `topology.skew` \| `task.collision` \| `orchestrator.error` \| `external.merge` \| …), what caught it, what was done | **what went wrong** |
+| `incident` | **Cadence got something wrong** (`kind`: `brief.false-premise` \| `orchestrator.false-gotcha` \| `orchestrator.lost-dispatch` \| `agent.exhausted` \| `topology.skew` \| `topology.stale` \| `preflight.stale` \| `task.collision` \| `orchestrator.error` \| `external.merge` \| `scope.widened` \| …), what caught it, what was done | **what went wrong** |
 | `stall` | the flow audit records a 3-tick stall (reason) | **what went wrong** |
 | `flow.converted` | a `waiting-for-merge` was converted (how) | flow health |
 | `escalation` | a task was re-spawned a model tier up, or a stale lease was recovered | **what went wrong**, cost |
