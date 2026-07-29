@@ -68,6 +68,8 @@ event the moment it happens, not at the end:
 | `conflict` / `conflict.resolved` | a sync conflicts; how it was resolved (base-favoured hunks) | **what went wrong** |
 | `pr.retargeted` | the PR's base changes — by you, or silently by GitHub after a branch delete | flow health |
 | `scope.checked` / `scope.polluted` | the post-sync diff-vs-base check (`filesChanged`, foreign paths) | **what went wrong** |
+| `branch.published` | a task pushes its branch at spec start (empty), making its dependents dispatchable | flow health, timeline |
+| `blocked.producer` | an implement agent found a consumed surface not yet on its base; built the rest and returned (`taskId`, `surface`) | flow health |
 | `task.spawn` | **any** agent is spawned — spec/implement/monitor/fix/cleanup *and* every ad-hoc repair, verification or housekeeping agent (`agentKind`, `model`, effort) | cost, timeline |
 | `task.complexity` | the spec phase decides `complexity` (+ whether it fused) | per-task, cost |
 | `join.built` / `join.refreshed` / `join.retired` | a join branch is created, re-merged, or retired | flow health |
@@ -214,6 +216,8 @@ are clean, and say which checks you ran to conclude that.
 | Signal | Count | Notes |
 |---|---|---|
 | Joins built / refreshed / retired | <n>/<n>/<n> | <which tasks> |
+| Blocker dispatched → dependent dispatched | <median> · <worst> | how long a dependent waited for its blocker's **branch** to appear. Branches publish at spec start, so this should be about one tick; large values mean they are being published late, and that is the serialization this row exists to catch |
+| `blocked.producer` returns | <n> | dependents that started before a producer's surface landed, built the rest and resumed on its next push — a healthy sign the chain is flowing rather than queuing |
 | Base syncs · conflicts resolved | <n> · <n> | <how many were squash-merge collisions> |
 | **Conflict latency** | median <n>m · worst <n>m | base moved → detected → clean again |
 | Scope-check failures | <n> | <PRs whose diff showed foreign files, and why> |

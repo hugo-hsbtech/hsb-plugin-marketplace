@@ -110,7 +110,9 @@ what the task does.)
 - **Flow, don't gate on merges — and prove it every tick.** Never freeze a task
   waiting for another task's PR to merge. A stacked task starts as soon as its
   blocker's branch exists; a multi-blocker task builds its join branch from those
-  branches and starts too. **"Waiting for a merge" is never a valid reason for a task
+  branches and starts too. **And a branch exists almost immediately, because every
+  agent publishes its branch at spec start, before it writes any code** — so a
+  dependent starts a tick after its blocker *starts*, never after it finishes. **"Waiting for a merge" is never a valid reason for a task
   to sit still** — every tick, run the **Flow audit** (below) and convert any such
   task into a dispatchable one (join / base-sync / re-target). The only ordering that exists
   is which branch a PR is based on.
@@ -503,9 +505,13 @@ single biggest quota leak in a long run. Kill it with a snapshot diff:
    - **`mergeStateStatus` ∈ `DIRTY`/`BEHIND`, or `mergeable: CONFLICTING`** → this PR
      is **top priority** and gets a monitor agent **every tick until it's clean**,
      whatever else is happening.
-2b. **A merge fans out immediately — in the SAME tick.** When the snapshot shows a task
-   PR merged, or the integration/blocker ref moved, spawn a sync monitor for **every
-   open dependent** at once (one message, parallel agents), not one per subsequent tick.
+2b. **A moved ref fans out immediately — in the SAME tick.** When the snapshot shows a
+   task PR merged, or the integration/blocker ref moved, spawn a sync monitor for
+   **every open dependent** at once (one message, parallel agents), not one per
+   subsequent tick. **This is also how a blocker's ordinary work-in-progress push
+   unblocks its dependents:** a task sitting at `specified` with `implementBlockedOn`
+   pointing at that blocker gets its **implement agent** re-spawned the same tick its
+   producer's branch moves. No polling, no waiting — the push *is* the signal.
    The human merges several PRs in a row; the dependents must all be brought current
    right away, not over the next half hour. Any of this **resets `monitorBackoff` to
    `baseSeconds`** — a moved base or a conflict means the run is HOT, never quiet.
@@ -534,7 +540,9 @@ to spawn, classify **every non-terminal task** with a reason it is not advancing
 | **`conflicted` / `behind`** — base moved under it (`DIRTY`/`BEHIND`/`CONFLICTING`, or `mergeable: UNKNOWN` unresolved) | ❌ **defect if it persists** | **highest priority: spawn its agent NOW**, every tick until clean. A conflicted PR is unreviewable *and* shows the wrong diff — it must never sit waiting for a human to notice |
 | `awaiting-human-decision` — an open blocking decision | ✅ | ensure it's in `attention`; remind per the decision rules |
 | `blocked-by-failed-dep` — a blocker is `failed` | ✅ | surface to the human; don't silently retry |
-| `waiting-for-blocker-branch` — blocker not started yet | ✅ *only* while the blocker is itself dispatchable/in flight | it clears as soon as the blocker's branch is pushed |
+| `waiting-for-blocker-branch` — blocker **not dispatched yet** | ✅ *only* until the blocker's own agent starts | it clears one tick later: an agent publishes its branch **before it writes any code** |
+| `waiting-for-blocker-branch` while the blocker **has** been dispatched | ❌ **defect** | the blocker's agent failed to publish its branch at spec start. Don't wait — surface it, and re-spawn the blocker so it pushes |
+| `awaiting-producer-code` — implementing, but a surface it consumes isn't on its base yet | ✅ while the blocker is actively building | nothing this tick; the blocker's next push moves its ref, which is a delta that re-spawns this task automatically. 3 ticks → `stalls[]` |
 | **`waiting-for-merge`** — anything held because another PR hasn't merged | ❌ **defect** | **fix it now**: build/refresh the **join base**, merge the advancing base in, or re-target the PR — then dispatch |
 
 Rules:
@@ -549,6 +557,41 @@ Rules:
 - The audit is read-only bookkeeping over the task files + the change-detection
   snapshot. It never touches a PR.
 
+### Branches are published at spec start — this is what makes the cycle flow
+The single ordering constraint in a cycle is **which branch a PR is based on**. So the
+speed of the whole cycle is set by one thing: **how soon a task's branch exists for its
+dependents to build on.**
+
+Every task agent therefore **pushes its branch the moment its worktree exists**, empty,
+before writing any code (playbook, Spec step 1), and **keeps pushing commits as it
+implements** rather than saving them for PR-creation.
+
+> **Why this rule exists.** Branches used to be pushed only at PR creation, at the end
+> of Implement step 5. Everything before that — spec, TDD build, lint/format/tests, the
+> complexity-scaled self-review, writing the PR body — happened on a branch no dependent
+> could see. So a dependent waited for its blocker to be *completely finished*, and a
+> chain of five tasks ran strictly end to end. That is a freeze indistinguishable from
+> waiting for a merge, and it survived every rule written against merge-waiting because
+> it had a different name: `waiting-for-blocker-branch`, classified as legitimate.
+
+What this buys, and why it's safe:
+- **A dependent is dispatchable one tick after its blocker is dispatched**, not after it
+  finishes. In a chain, every task's expensive Opus spec phase runs in parallel.
+- **An empty branch is inert** — identical to its base, no PR, not reviewed, invisible.
+  It costs a ref.
+- **Producers arrive as commits, not as merges.** A dependent merges its base in at
+  implement start and checks the surfaces it consumes are actually present; if one isn't
+  yet, it builds everything else, pushes, records `implementBlockedOn` and returns.
+- **Nobody polls for it.** `refSnapshot` already watches every task branch, so a
+  blocker's push moves its ref, and **a moved ref is a delta for every PR and task based
+  on it, fanned out in the same tick**. The dependent is re-spawned automatically.
+- **Never force-push.** A dependent may already be based on what was pushed. Fix history
+  forward with another commit.
+
+A dependent still parked on `waiting-for-blocker-branch` **after its blocker has been
+dispatched** is a defect, not patience: the blocker's agent failed to publish. Surface it
+and re-spawn the blocker.
+
 ### Join base: how a 2+-blocker task starts without waiting
 A task with several blockers used to branch off integration — which does **not** yet
 contain its blockers' code — so it could only really begin once they merged. That is
@@ -557,7 +600,11 @@ in `references/task-agent.md`); the orchestrator only needs the activation rule 
 the retirement rule:
 
 - **Activation:** a 2+-blocker task is dispatchable as soon as **every** blocker's
-  branch exists on the remote — merged or not.
+  branch exists on the remote — merged or not, and **with or without code on it yet**.
+  Since every agent publishes its branch before it writes a line (see *Branches are
+  published at spec start*), that is one tick after the last blocker is *dispatched*,
+  not after it finishes. A join built from branches that are still empty is correct and
+  costs nothing — it refreshes as they advance.
 - **Construction (task agent):** `cadence/<slug>-t<id>-join`, cut from
   `origin/<integrationBranch>`, with each blocker's branch merged in, pushed. The task
   branch is cut from the join — and **the PR targets the INTEGRATION branch, never the
@@ -802,8 +849,10 @@ This is the only "work" the top orchestrator dispatches — it does NOT implemen
 poll, or fix anything itself. An **active** task is one not yet `done`/`failed` whose
 **base is available** — the integration branch (0 blockers), its single blocker's
 branch (stacked), or **every** blocker's branch existing so its join branch can be
-built (2+ blockers). **This is NOT "blockers merged"** — a task is active the moment
-the branches it depends on exist, so work flows without waiting for merges.
+built (2+ blockers). **This is NOT "blockers merged"**, and it is not "blockers
+finished" either: agents publish their branches at spec start, so the branches a task
+depends on exist a tick after those tasks are *dispatched*. Work flows without waiting
+for merges **or for a blocker's gate, self-review and PR**.
 
 **First: run Change detection** (one batched GraphQL call, diff vs `prSnapshot`),
 **then the Flow audit** (classify why each non-terminal task isn't advancing; convert
@@ -813,7 +862,7 @@ any `waiting-for-merge`). Then, of the active tasks, act ONLY on the **idle** on
 | Task status (idle, no agent in flight) | Spawn this tick (model) |
 |---|---|
 | `pending` (base available) | **spec agent** — verify-and-extend the brief, decides `complexity`; **fuses into implement for `trivial` only** (**opus/high**) → `specified` (or `open` when fused) |
-| `specified` | **implement agent** — TDD build → opens PR (**model = `modelPolicy[complexity]`**) → `open` |
+| `specified` | **implement agent** — sync base, verify its producers landed, TDD build → opens PR (**model = `modelPolicy[complexity]`**) → `open`. If a consumed surface isn't on its base yet it builds the rest, pushes, and returns `specified` with `implementBlockedOn` — re-spawned automatically when the blocker's ref moves |
 | `open` **with a snapshot delta** | **monitor agent** — Monitor pass on the settled PR (**sonnet/low**) |
 | `open`, no delta, but **readiness or auto-merge may now pass** (draft whose blocker just merged, approval recorded and guards satisfiable, a base that advanced) | **monitor agent** (**sonnet/low**) — the readiness / auto-merge / base-sync re-check is work even when the PR itself didn't change |
 | `open`, no delta, with an **open decision due for a reminder** | **monitor agent** (**sonnet/low**) — one reminder, then back to quiet |

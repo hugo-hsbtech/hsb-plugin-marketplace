@@ -94,6 +94,26 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
    - **2+ blockers** → base = **your own join branch**, which you build now (below).
      You do **not** wait for the blockers to merge.
 
+   > #### PUBLISH YOUR BRANCH IMMEDIATELY — before you write a line of code
+   > As soon as the worktree exists, push the branch:
+   > ```bash
+   > git push -u origin <branch>      # empty at this point — identical to its base
+   > ```
+   > **Your branch existing on the remote is what makes every task that depends on you
+   > dispatchable.** Until you push, they cannot start: their base does not exist, and
+   > the orchestrator parks them as `waiting-for-blocker-branch`.
+   >
+   > This used to happen only at PR-creation time (Implement step 5), which meant a
+   > dependent waited for your spec **and** your build **and** your gate **and** your
+   > self-review **and** your PR body before it could begin. Chains of tasks therefore
+   > ran end to end in sequence — the exact freeze this whole design exists to prevent,
+   > wearing a different name. Pushing an empty branch costs nothing (it is identical to
+   > its base, has no PR, and is invisible in review) and it unblocks your dependents a
+   > tick after you *start* rather than after you *finish*.
+   >
+   > Record `branchPublishedAt` in `tasks/<id>.json` and log a `branch.published`
+   > event. Then **keep pushing as you work** (Implement step 3) — never force-push.
+
    **Building the join branch (2+ blockers only).** You need a base that already
    contains every blocker's work; integration won't have it until they merge, and
    waiting for that is the freeze this exists to kill. So synthesize the base:
@@ -278,11 +298,56 @@ shipped and how to change it, and report it in your return summary as
 
 ## Implement phase (TDD → PR; spawned at modelPolicy[complexity], or fused)
 
+> ### FIRST: sync your base, then check your producers are actually there
+> Your blockers are almost certainly still working — that is the point of stacking on a
+> live branch rather than waiting for a merge. So before you build:
+>
+> 1. `git fetch origin` and **merge your base in** (`git merge origin/<baseBranch>`; for
+>    a 2+-blocker task, refresh your join from integration + every blocker head first).
+>    You now have whatever your blockers have pushed so far.
+> 2. **Check the surfaces you consume exist** — the specific exports, endpoints,
+>    entities, columns or migrations your spec said you'd build against. Check for them
+>    in the tree, not in the brief.
+>
+> **If they're all there → build normally.**
+>
+> **If a producer's surface isn't there yet:** do not stub it, do not invent it, and do
+> not sit and wait for it (never poll — see NEVER WAIT INSIDE A TICK).
+> - Implement everything that does **not** depend on the missing surface, commit, and
+>   **push**.
+> - Write `implementBlockedOn: {taskId, surface, note}` to `tasks/<id>.json`, log a
+>   `blocked.producer` event, set `status = specified`, and **return**.
+> - You will be re-spawned automatically the moment your blocker pushes: the
+>   orchestrator watches every task branch's head OID, and a moved ref is a delta that
+>   fans out to every dependent **in the same tick**. That is the whole mechanism — you
+>   wait for nothing and nobody polls.
+>
+> This is what "flow, don't gate on merges" means at the code level: you wait for your
+> producer's **commit**, which lands as it is written, not for its gate, its review, its
+> PR, or its merge.
+
 3. **Implement (TDD).** Execute the plan via `executing-plans` /
    `subagent-driven-development` with `test-driven-development` — for a `trivial`
    fused run, implement directly with TDD, no sub-orchestration.
    Honor all repo `CLAUDE.md` rules and invoke required project skills
    (migrations, etc.).
+
+   > #### PUSH AS YOU GO — your commits are somebody else's base
+   > `git push` after each meaningful commit, and **always** immediately after you
+   > land a surface another task consumes (the exported function, the endpoint, the
+   > entity, the migration your dependents were told to expect). Do not save it all
+   > for the PR.
+   >
+   > A dependent stacks on *your branch*, so every commit you push is a commit it can
+   > build against. Holding your work locally until the PR is open forces every task
+   > below you to wait out your gate, your self-review and your PR body — for code you
+   > finished writing an hour earlier. **The gate protects your PR, not your branch:**
+   > a branch with no PR is not under review and nobody is reading it, so pushing
+   > work-in-progress to it costs nothing and unblocks the cycle.
+   >
+   > Push plainly, and **never force-push** — a dependent may already be based on what
+   > you pushed. If your local history needs fixing, fix it forward with another
+   > commit.
 4. **Verify.** Run the repo's lint/format/tests gate (per `CLAUDE.md`). Use
    `verification-before-completion`. Do not open a PR on a red gate — fix first.
    Then run a **pre-push self-review scaled to `complexity`**, scoped to *this

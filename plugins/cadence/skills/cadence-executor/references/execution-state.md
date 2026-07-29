@@ -158,6 +158,16 @@ then uses it to pick the Implement agent's model. `agentKind` ∈
   doc/comment only).
 - `roster[].model` — the model the current in-flight agent was spawned with (for audit
   + escalation tracking).
+- `tasks/<id>.json.branchPublishedAt` — when the task's agent pushed its branch to the
+  remote. **This happens at spec start, before any code is written**, because a task's
+  branch existing is what makes its dependents dispatchable. Publishing at PR-creation
+  instead (the old behaviour) forced every dependent to wait out its blocker's build,
+  gate, self-review and PR body — a chain then ran strictly end to end, which is a
+  freeze wearing the name `waiting-for-blocker-branch`.
+- `tasks/<id>.json.implementBlockedOn` — `{taskId, surface, note}` when an implement
+  agent found a surface it consumes not yet pushed to its base. It builds everything
+  else, pushes, records this, and returns to `specified`. **No polling:** the blocker's
+  next push moves its ref, which is a delta that re-spawns this task the same tick.
 - `modelPolicy` — model/effort by phase: **spec/analysis → opus, high effort
   (always)**; **implement** → high→opus/medium, medium/low/trivial→sonnet; **monitor/
   fix/cleanup** → sonnet, low effort. Think on Opus, do routine work on Sonnet — don't run

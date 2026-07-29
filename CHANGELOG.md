@@ -115,6 +115,40 @@ were not.
   identity header, the plan PR's cycle map, and the id+PR+description rule. `cycleLabel`
   is gone from the schema.
 
+### cadence — executor: branches publish at spec start (the real freeze)
+
+The merge-wait rules were all in place and being followed — and cycles still ran their
+dependency chains strictly end to end. The cause was a second gate that every
+anti-freeze rule permitted by name.
+
+A task's branch was pushed in exactly one place: **PR creation**, at the end of Implement
+step 5. Dispatch requires a blocker's branch to *exist on the remote*. So a dependent
+waited for its blocker's spec **and** TDD build **and** lint/format/tests **and**
+complexity-scaled self-review **and** PR body — everything — before it could start. The
+flow audit classified that as `waiting-for-blocker-branch` → **legitimate**. Caught live
+in a running cycle: *"Merged (9): T1–T9 · Implementing: T10 · Pending (6): T11–T16 …
+the tail is serial by design."* Six tasks idle behind one, waiting on a branch that
+already existed in a worktree and simply hadn't been pushed.
+
+- **Publish the branch at spec start** — pushed empty, before a line of code, the moment
+  the worktree exists. An empty branch is identical to its base, has no PR and is not
+  reviewed; it costs a ref and makes every dependent dispatchable **one tick after the
+  blocker is dispatched** rather than after it finishes. Every task's Opus spec phase now
+  runs in parallel across the whole cycle.
+- **Push commits as you implement**, not at PR-creation — always immediately after
+  landing a surface a dependent consumes. The gate protects the PR, not the branch.
+- **Dependents check their producers, and never wait.** An implement agent syncs its base
+  and verifies the surfaces it consumes are present. If one isn't yet, it builds
+  everything else, pushes, records `implementBlockedOn`, and returns to `specified`.
+- **The re-spawn is free.** `refSnapshot` already watches every task branch, so the
+  blocker's next push moves its ref — a delta that fans out to every dependent in the
+  same tick. No polling anywhere.
+- `waiting-for-blocker-branch` is now a **defect** when the blocker has already been
+  dispatched, and never force-push (a dependent may be based on what you pushed).
+- New events `branch.published` / `blocked.producer`; new state `branchPublishedAt` /
+  `implementBlockedOn`; two new flow-health rows so the next report shows whether
+  branches are being published on time.
+
 Round recorded in `docs/feedback/20260729-first-real-cycle-report.md`, including the six
 findings deliberately **not** acted on and the field in the next report that will show
 whether each fix worked.

@@ -174,6 +174,33 @@ plan docs and is the convergence point every task ultimately lands on. It opens 
   > blockers' files too; that's declared in the body ("34 files — 8 this task's, 26 from
   > #35, not yet merged") and shrinks by itself as each blocker lands.
 
+**Branches are published at spec start** — and this, more than anything else, is what
+decides how fast a cycle runs. A task agent pushes its branch **the moment its worktree
+exists, empty, before writing a line of code**, then keeps pushing commits as it builds.
+
+> **Why it matters.** A task's branch existing is what makes its dependents
+> dispatchable. When branches were pushed only at PR-creation, a dependent had to wait
+> out its blocker's entire build *and* its lint/test gate *and* its self-review *and*
+> its PR body before it could begin — so a chain of tasks ran strictly end to end. That
+> is the same freeze as gating on merges; it just had a friendlier name
+> (`waiting-for-blocker-branch`). Observed live, mid-cycle: *"Merged (9): T1–T9 ·
+> Implementing: T10 · Pending (6): T11–T16 … the tail is serial by design."* Six tasks
+> idle behind one, waiting on a branch that already existed in a worktree and simply
+> hadn't been pushed.
+>
+> An empty branch is inert — identical to its base, no PR, nobody reviewing it — and it
+> costs one ref. Publishing it makes a dependent dispatchable **one tick after its
+> blocker is dispatched**, so every task's expensive Opus spec phase runs in parallel
+> instead of in sequence.
+
+A dependent's implement phase merges its base in and checks that the surfaces it
+consumes are actually there. If a producer hasn't landed yet it builds everything else,
+pushes, records `implementBlockedOn` and returns — **and nothing polls for it**: the
+blocker's next push moves its branch ref, and a moved ref is a delta that re-spawns
+every dependent in the same tick. You wait for your producer's *commit*, not its gate,
+its review, its PR, or its merge. (Branches are never force-pushed — a dependent may
+already be based on what was pushed.)
+
 **Flow, don't gate** — a task starts the moment the branches it depends on *exist*, not
 when their PRs *merge*. Work never freezes waiting on a human to click merge;
 dependencies are expressed by PR base, and base syncs carry changes forward as bases

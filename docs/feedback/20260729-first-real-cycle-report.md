@@ -223,6 +223,69 @@ is removed from the schema (a leftover value in an older run's `run.json` is ign
 from the run-open announcement, the PR template, the report header, `CLAUDE.md` and the
 README.
 
+### 12. The real freeze — branches published only at PR-creation · **behavior defect · FIXED**
+
+**Raised by the user after the round above shipped:** *"the behavior of waiting PR merges
+to continue creating others still remains, freezing the work completely."*
+
+**Corroborated live, mid-cycle**, from a running `voucher-phase2-c2-statements-dashboards`
+turn summary:
+
+> Merged (9): T1–T9 · Implementing: T10 · Pending (6): T11–T16
+> T11 is convergence-blocked on T10, so there's genuinely nothing else to dispatch —
+> **the tail is serial by design.**
+
+Six tasks idle behind one, and the orchestrator concluding that was correct.
+
+**Root cause, and why every anti-freeze rule missed it.** The merge-wait rules were all
+present and being followed — `waiting-for-merge` is a defect, the flow audit runs every
+tick, dependencies are expressed by base. But a task's branch is pushed in exactly **one**
+place: `task-agent.md`, **Implement step 5, at PR creation**. Dispatch requires a
+blocker's branch to *exist on the remote* (`SKILL.md:531`, `:560`, `:803`). So a dependent
+waited for its blocker's spec **and** TDD build **and** lint/format/tests **and**
+complexity-scaled self-review **and** PR body before it could start — and the flow audit
+classified that as `waiting-for-blocker-branch` → **✅ legitimate**.
+
+It was a merge-wait in everything but name, blessed by the very table written to abolish
+merge-waits. That is why fixes 1–11 above didn't touch it.
+
+**The honest trade-off, put to the user.** Literal zero-wait isn't free: dependencies
+exist because a task *calls* its blocker's code, so a dependent that starts implementing
+immediately has a red gate until the producer lands. Three models were offered; the user
+chose the middle one — **publish early and push continuously**.
+
+**Changed:**
+- **The branch is pushed at spec start**, empty, before any code — the moment the worktree
+  exists. An empty branch is identical to its base, has no PR, and is not reviewed; it
+  costs a ref. This makes a dependent dispatchable **one tick after its blocker is
+  dispatched** rather than after it finishes, so every task's expensive Opus spec phase
+  runs in parallel across the cycle.
+- **Commits are pushed as they're written**, not saved for PR-creation, and always
+  immediately after landing a surface a dependent consumes. *The gate protects the PR, not
+  the branch* — a branch with no PR is not under review.
+- **Dependents verify their producers instead of waiting.** An implement agent merges its
+  base in and checks the surfaces it consumes are actually present. If one isn't, it
+  builds everything else, pushes, records `implementBlockedOn`, and returns to
+  `specified`.
+- **The re-spawn costs nothing and needed no new machinery.** `refSnapshot` already
+  watches every task branch, so the blocker's next push moves its ref — and a moved ref is
+  already a delta that fans out to every dependent in the same tick. The push *is* the
+  signal; nothing polls.
+- `waiting-for-blocker-branch` is now a **defect** once the blocker has been dispatched
+  (its agent failed to publish). Never force-push: a dependent may already be based on
+  what was pushed.
+- New: `branch.published` / `blocked.producer` events, `branchPublishedAt` /
+  `implementBlockedOn` state, and two flow-health rows — *blocker dispatched → dependent
+  dispatched* and *`blocked.producer` returns* — so the next report shows directly whether
+  branches are being published on time.
+
+**Note on the in-flight cycle.** The `c2-statements-dashboards` run is open right now.
+Branch-publication timing is **mechanical**, not a pinned promise (the pinned set is merge
+policy, draft/readiness, `main` safety, topology — and the base *derivation* is unchanged
+here), so a running orchestrator picks this up on its next wake **if** it reads these
+files rather than a separately-installed copy. Worth checking before assuming the tail
+un-freezes on its own.
+
 ---
 
 ## Deliberately NOT changed
