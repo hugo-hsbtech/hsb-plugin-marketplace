@@ -9,6 +9,22 @@ Releases of the plugins in this marketplace. Versions are **per plugin** and tag
 
 ## Unreleased
 
+_Nothing yet._
+
+---
+
+# cadence
+
+## 3.12.0 — 2026-07-29
+
+Feedback from running `3.11.0` on a live cycle. Baseline: `3.11.0`.
+
+> One of the three items below is a **fix to a regression `3.11.0` introduced** — its
+> branch-publication change removed a real freeze but let dependents start before their
+> blockers had decided anything. The other two are the capability that was missing
+> underneath it (knowledge transfer between agent contexts) and a planner default
+> confirmed by five cycles of the user writing it by hand.
+
 ### cadence — sequencing, the handoff, and a default exit gate
 
 Feedback from running **3.11.0**: it started dependent tasks in parallel with the tasks
@@ -53,10 +69,6 @@ owning the cycle-level acceptance criteria no single task owns, **tests and harn
 only** — a needed production change is a finding, not something to absorb. It is the one
 task allowed an empty R-id list, and a source plan that already ends with an equivalent
 phase is adopted rather than duplicated. Pre-write gate assertion 6 enforces it.
-
----
-
-# cadence
 
 ## 3.11.0 — 2026-07-29
 
