@@ -9,6 +9,24 @@ Releases of the plugins in this marketplace. Versions are **per plugin** and tag
 
 ## Unreleased
 
+_Nothing yet._
+
+---
+
+# cadence
+
+## 3.11.0 — 2026-07-29
+
+Three batches, one release — the first driven by evidence from a **completed** cycle
+(`voucher-phase2-c1-exceptions-foundations`, 18 tasks, PRs #31–#55) plus a second cycle
+caught mid-flight. Baseline: `3.10.0`.
+
+> **Honest status:** `3.10.0` shipped unexercised, and most of this batch is likewise
+> unproven — the exception is the branch-publication fix, which was diagnosed against a
+> live run's own turn summary. The next real signal is a cycle report run against
+> `3.11.0`. Two of the fixes below are corrections to rules that contradicted their own
+> invariants in `3.10.0`.
+
 ### cadence — planner: plan-doc fidelity
 
 From two live cycles in `pagana-catalog-apps` — a rich plan (14 tasks, 481 lines, 137
@@ -152,10 +170,6 @@ already existed in a worktree and simply hadn't been pushed.
 Round recorded in `docs/feedback/20260729-first-real-cycle-report.md`, including the six
 findings deliberately **not** acted on and the field in the next report that will show
 whether each fix worked.
-
----
-
-# cadence
 
 ## 3.10.0 — 2026-07-28
 
