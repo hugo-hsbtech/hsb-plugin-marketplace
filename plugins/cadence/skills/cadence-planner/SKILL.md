@@ -240,6 +240,45 @@ migration never joins a `docs` bundle.**
 - Note the **critical path** (longest dependency chain) — it sets the minimum
   number of cycles regardless of parallelism.
 
+### 4b. Append the EXIT GATE task (default — every cycle gets one)
+A cycle's tasks are each verified against **their own base**. Nothing verifies the
+**union**: the interaction between tasks that were built in parallel, and the suites
+that don't run per-PR (fresh-database migration order, `RUN_REAL_TESTS`/e2e legs, real
+service round-trips). That is a structural hole in per-PR CI, not a discipline problem —
+in production a cycle merged a migration that failed on **any fresh database**, because
+the only suite that would have caught it runs on a manual workflow input and was
+invisible to every task's gate.
+
+So the plan's **last task is always the full gate delivery**, and the planner emits it:
+
+- **Id:** the next id after the real tasks; **depends on EVERY other task**, so it lands
+  in its own final wave, alone.
+- **What it does:** run the repo's complete gate on the assembled cycle — lint,
+  typecheck, unit, **integration**, **e2e / real-service legs**, plus any codegen or
+  contract-drift check the repo has — and prove the cycle's own end-to-end promise
+  (the chain the cycle exists to deliver, exercised through production code paths, not
+  mocks).
+- **Also owns the cycle-level acceptance criteria no single task owns** — the "the
+  whole thing works" statements from the source plan's Desired End State. Assign those
+  R-ids here rather than leaving them unaccounted.
+- **Touch set: tests and harness only.** It writes no production code. If proving the
+  chain requires a production change, that is a **finding** — it reports it for
+  re-planning rather than absorbing it (an exit gate that edits the thing it is
+  auditing has stopped being a gate).
+- **Honest about what it proves.** Where a local emulator or stub cannot enforce what
+  real infrastructure would, the task's brief says so, and the delivered test's docblock
+  says so — a plumbing proof is not an enforcement proof, and claiming otherwise is
+  worse than not testing it.
+
+**If the source plan already ends with an equivalent verification/gate phase, adopt it
+rather than adding a second one:** mark it as the exit gate and make it depend on every
+other task. Never emit two.
+
+**Ledger treatment.** The exit gate carries R-ids only for cycle-level criteria it
+genuinely owns. If there are none, it carries none — and that is the one task allowed an
+empty "Requirements covered" list (pre-write gate assertion 1). It is never a place to
+park requirements that belong to a real task.
+
 ### 5. Emit the cycle plan (handoff artifact)
 Write the plan to `docs/plans/proposed/` (or print inline if no repo plans dir) using
 this filename convention:
@@ -315,7 +354,8 @@ review pass.
 > Mechanical, not advisory. Check each one against the text you are about to write; any
 > failure is fixed **before** writing, not noted afterwards.
 > 1. **Every task brief has an R-id checklist** with at least one `**T<id>.<n>**` entry,
->    each carrying a source anchor. Zero R-ids anywhere in the document = stop.
+>    each carrying a source anchor — **except the exit gate**, which may carry none when
+>    no cycle-level criterion is its own. Zero R-ids anywhere in the document = stop.
 > 2. **The ledger balances and is in the header:**
 >    `assigned + deferred = inventoried`, `0 unaccounted`.
 > 3. **Every brief carries its fields** — Goal/done, Requirements covered, Creates,
@@ -326,6 +366,9 @@ review pass.
 >    dashed conflict edges, edge labels, and wave subgraphs are for — see the template.
 > 5. **Section order matches the template**, and no mandated section is missing
 >    (tasks · graph · waves · briefs · conflicts · scope boundary · handoff).
+> 6. **The last task is the exit gate**, it depends on **every** other task, it is alone
+>    in the final wave, and its touch set contains no production code. Exactly one exit
+>    gate exists — if the source plan already had one, it was adopted, not duplicated.
 >
 > If you cannot satisfy one of these, say so explicitly in the plan and in your summary
 > — never emit a plan that quietly fails a gate.

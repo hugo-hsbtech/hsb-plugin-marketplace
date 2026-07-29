@@ -9,7 +9,50 @@ Releases of the plugins in this marketplace. Versions are **per plugin** and tag
 
 ## Unreleased
 
-_Nothing yet._
+### cadence — sequencing, the handoff, and a default exit gate
+
+Feedback from running **3.11.0**: it started dependent tasks in parallel with the tasks
+they depend on. *"One PR implementation needs the knowledge the dependent task — as they
+are being executed in parallel, how could the PR that depends know what to be done since
+the dependent PR is not done yet?"*
+
+That is a regression 3.11.0 introduced, and the diagnosis is narrow: 3.11.0's producer
+check lived **only in the implement phase**. The **spec phase had no gate at all** — and
+spec is what decides the plan, the complexity, and (for `trivial`) fuses straight to a
+PR. So a dependent's `verify-and-extend` ran against a tree without its blocker's work,
+planned from the brief alone, and built on an interface nobody had decided.
+
+- **Two sequencing gates, per edge.** A dependent's **spec** waits until every blocker is
+  `specified` (its handoff contract written); its **implement** waits until every blocker
+  is `open` (PR up, gate green, self-reviewed). Both clear on another **agent's**
+  progress, never on a human's merge — that is the line between sequence and a freeze.
+  `awaiting-blocker-spec` / `awaiting-blocker-pr` are legitimate; `waiting-for-merge`
+  remains a defect. Independent tasks still run fully parallel.
+- **`trivial` may only fuse** spec→implement when its blockers are already `open`.
+  Fusing past a sequencing gate is how a dependent ships against code that doesn't exist.
+- **The handoff — knowledge that crosses agent contexts.** An agent is spawned fresh,
+  does one step, and dies; the planner's brief is a *prediction* written before any code
+  existed. Every task now writes `handoff.contract` at the end of spec (exact surfaces:
+  names, signatures, routes, entities, migrations — plus decisions and deviations from
+  the brief) and `handoff.delivered` when its PR opens (what actually shipped, drift from
+  its own contract, and the gotchas a consumer would otherwise rediscover). **The
+  orchestrator pastes every blocker's handoff verbatim into the dependent's brief**, and
+  **the handoff outranks the brief** where they disagree. A missing or divergent surface
+  at implement time is a reported `contract.mismatch`, never something to stub around.
+- **Branch publication is retained but demoted.** Publishing at spec start still removes
+  the mechanical wait for a branch to exist; it is no longer treated as permission to
+  start early.
+
+**Planner: every cycle ends with an exit-gate task, by default.** Each task is verified
+against its own base; nothing verified the union — the interaction of parallel work, and
+the suites that don't run per-PR (a cycle once merged a migration that failed on any
+fresh database, because the only suite that would have caught it runs on a manual
+workflow input). The planner now appends a final task depending on every other: the
+repo's complete gate plus the cycle's end-to-end promise through production code paths,
+owning the cycle-level acceptance criteria no single task owns, **tests and harness
+only** — a needed production change is a finding, not something to absorb. It is the one
+task allowed an empty R-id list, and a source plan that already ends with an equivalent
+phase is adopted rather than duplicated. Pre-write gate assertion 6 enforces it.
 
 ---
 

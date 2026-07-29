@@ -164,7 +164,16 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
    exact same base). Use the superpowers `using-git-worktrees` skill. NEVER work on
    `main`, and never branch a task off `main`.
 
-2. **Verify-and-extend the planner's brief — do NOT re-derive it.** The cycle
+2. **Verify-and-extend the planner's brief — do NOT re-derive it.**
+
+   > **Your blockers' handoffs outrank the plan's brief.** If your brief includes a
+   > blocker's `handoff.contract`/`handoff.delivered`, that is the interface you build
+   > against — it describes decisions a real agent made against real code, while the
+   > plan's touch set was predicted before any of it existed. Where they disagree, take
+   > the handoff and note the divergence in your own contract. If the handoff itself
+   > looks wrong, say so in your return summary; don't silently route around it.
+
+   The cycle
    plan's context brief (touch set + atomic requirement checklist + acceptance
    criteria) was already produced by opus/high codebase analysis. Re-running that
    analysis from scratch is the single biggest avoidable cost per task. Instead:
@@ -209,10 +218,25 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
      change with **no logic/behavior change** — a typo, lint/formatting fix, or
      comment/doc-only edit; anything that alters behavior is at least `low`.
 
+   - **Write your `handoff.contract`** into `tasks/<id>.json` before you return —
+     this is what every task depending on you will build against, and the only thing
+     that survives your turn. It states: the **exact** surfaces you will produce
+     (names, signatures, routes, entities, migration names — not "an endpoint for X"),
+     the design decisions you took and why, **anything that differs from the plan's
+     brief**, and what a dependent must know to use it. Log `handoff.written`.
+
+     > Your dependents' agents never share a context with you and never will. The plan
+     > brief they also receive is a *prediction* written before any of this code
+     > existed; your handoff is what is *true*. If you leave it vague, they guess — and
+     > a guess about your interface is rework for both of you.
+
    Then: `high`/`medium`/`low` → write the plan, set `status = specified`, return
    (the orchestrator spawns the implement agent at that tier — `low` runs on
-   sonnet/low, and that saving is the point). **Only `trivial`** → set
-   `status = implementing` and continue below (fused path).
+   sonnet/low, and that saving is the point). **Only `trivial`, and only when every
+   blocker's PR is already open** → set `status = implementing` and continue below
+   (fused path). A `trivial` task whose blockers aren't `open` yet stops at `specified`
+   like everything else: fusing past a sequencing gate is how a dependent ships against
+   code that does not exist.
 
 ## Open decisions (a question for the human must be ANSWERABLE, or it isn't asked)
 
@@ -298,33 +322,27 @@ shipped and how to change it, and report it in your return summary as
 
 ## Implement phase (TDD → PR; spawned at modelPolicy[complexity], or fused)
 
-> ### FIRST: sync your base, then check your producers are actually there
-> Your blockers are almost certainly still working — that is the point of stacking on a
-> live branch rather than waiting for a merge. So before you build:
+> ### FIRST: sync your base, then verify your producers are actually there
+> You were only dispatched because **every blocker's PR is open** — their code is
+> complete, gated and self-reviewed. So the code you depend on exists; your job is to
+> pick it up and confirm it matches what you were told.
 >
 > 1. `git fetch origin` and **merge your base in** (`git merge origin/<baseBranch>`; for
 >    a 2+-blocker task, refresh your join from integration + every blocker head first).
->    You now have whatever your blockers have pushed so far.
-> 2. **Check the surfaces you consume exist** — the specific exports, endpoints,
->    entities, columns or migrations your spec said you'd build against. Check for them
->    in the tree, not in the brief.
+> 2. **Verify the surfaces you consume are present and match your blockers'
+>    `handoff.delivered`** — the exact exports, endpoints, entities, columns or
+>    migrations. Check the tree, not the brief.
 >
-> **If they're all there → build normally.**
+> **If they're all there and match → build normally**, against the real signatures, not
+> the ones the plan predicted.
 >
-> **If a producer's surface isn't there yet:** do not stub it, do not invent it, and do
-> not sit and wait for it (never poll — see NEVER WAIT INSIDE A TICK).
-> - Implement everything that does **not** depend on the missing surface, commit, and
->   **push**.
-> - Write `implementBlockedOn: {taskId, surface, note}` to `tasks/<id>.json`, log a
->   `blocked.producer` event, set `status = specified`, and **return**.
-> - You will be re-spawned automatically the moment your blocker pushes: the
->   orchestrator watches every task branch's head OID, and a moved ref is a delta that
->   fans out to every dependent **in the same tick**. That is the whole mechanism — you
->   wait for nothing and nobody polls.
->
-> This is what "flow, don't gate on merges" means at the code level: you wait for your
-> producer's **commit**, which lands as it is written, not for its gate, its review, its
-> PR, or its merge.
+> **If a surface is missing or differs from the handoff**, that is a **contract
+> mismatch**, not something to work around. Do not stub it, invent it, or quietly adapt
+> and hope. Record it (`implementBlockedOn: {taskId, surface, expected, found}`), log an
+> `incident` (`kind: "contract.mismatch"`), raise it in your return summary so the
+> orchestrator surfaces it, and — if you can still deliver something coherent without
+> it — build that part and say exactly what you left out. Never poll or wait inside the
+> tick (see NEVER WAIT INSIDE A TICK); return and let the next tick pick it up.
 
 3. **Implement (TDD).** Execute the plan via `executing-plans` /
    `subagent-driven-development` with `test-driven-development` — for a `trivial`
@@ -408,7 +426,16 @@ shipped and how to change it, and report it in your return summary as
    content requirements, below).**
    Write `prNumber/Url`, `branch`, `baseBranch`, `joinBranch?`, `worktreePath`,
    `isDraft`, `readyAt?`, `decisionLog`, `pendingDecisions`, `status = open` to
-   `tasks/<id>.json`; return the summary. You end this tick here (do NOT busy-wait
+   `tasks/<id>.json`; return the summary.
+
+   **Also write `handoff.delivered`** — what actually shipped, and it is the moment
+   your dependents start moving, because their implement phase unlocks when your PR
+   opens. State the **final** surfaces (exact names and signatures as merged into the
+   branch, not as predicted), **any drift from your own `handoff.contract`** and why,
+   and the gotchas you hit that a consumer would otherwise rediscover — the setup step
+   that turned out to be required, the command that must be used and the one that
+   silently fails, the ordering that matters. Log `handoff.written`.
+   Cheap to write now; expensive for three other agents to re-derive later. You end this tick here (do NOT busy-wait
    for review).
 
    > #### READINESS IS YOURS TO DECIDE — never ask, never leave it hanging

@@ -189,17 +189,38 @@ exists, empty, before writing a line of code**, then keeps pushing commits as it
 > hadn't been pushed.
 >
 > An empty branch is inert — identical to its base, no PR, nobody reviewing it — and it
-> costs one ref. Publishing it makes a dependent dispatchable **one tick after its
-> blocker is dispatched**, so every task's expensive Opus spec phase runs in parallel
-> instead of in sequence.
+> costs one ref. Publishing it means a dependent can cut its worktree the instant its
+> **sequencing gate** clears (below), instead of waiting for a branch to appear. It is
+> not, on its own, permission to start early.
 
-A dependent's implement phase merges its base in and checks that the surfaces it
-consumes are actually there. If a producer hasn't landed yet it builds everything else,
-pushes, records `implementBlockedOn` and returns — **and nothing polls for it**: the
-blocker's next push moves its branch ref, and a moved ref is a delta that re-spawns
-every dependent in the same tick. You wait for your producer's *commit*, not its gate,
-its review, its PR, or its merge. (Branches are never force-pushed — a dependent may
-already be based on what was pushed.)
+Branches are never force-pushed — a dependent may already be based on what was pushed.
+
+**Sequencing — a dependent follows its blocker's decisions, then its code.** Publishing
+a branch early removes a *mechanical* wait; it does not mean a dependent starts building
+immediately. A dependency edge exists because one task needs what another **decides and
+builds**, so running them concurrently doesn't make the second faster — it makes it
+guess. Two gates:
+
+| The dependent's… | waits until every blocker is… | because it needs… |
+|---|---|---|
+| **spec** | `specified` — its `handoff.contract` is written | the decided interface, not a prediction |
+| **implement** | `open` — its PR is up, gate green, self-reviewed | the real code to build and test against |
+
+Both clear on another **agent's** progress, never on a human's merge — that is the
+difference between sequence and a freeze. Tasks with no edge between them still run
+fully parallel; the gate is per edge, not per wave.
+
+**The handoff — how knowledge crosses agent contexts.** A task agent is spawned fresh,
+does one step, and dies. Its dependents' agents never share its context, and the
+planner's brief is a *prediction* written before any of the code existed. So every task
+writes a **handoff** into its own state file: `contract` at the end of spec (the exact
+surfaces it will produce — names, signatures, routes, entities, migrations — plus its
+decisions and anything differing from the brief), and `delivered` when its PR opens
+(what actually shipped, drift from its own contract, and the gotchas a consumer would
+otherwise rediscover). The orchestrator pastes every blocker's handoff verbatim into the
+dependent's brief, and **the handoff outranks the brief** where they disagree. A surface
+that's missing or different at implement time is a reported `contract.mismatch`, never
+something to stub around.
 
 **Flow, don't gate** — a task starts the moment the branches it depends on *exist*, not
 when their PRs *merge*. Work never freezes waiting on a human to click merge;
@@ -370,11 +391,35 @@ Turn tasks into a wave schedule. **Plan-only** — it never implements or dispat
 3. Builds the dependency graph (declared + producer→consumer + write-write conflict);
    graphify import/call edges, when present, are the preferred evidence.
 4. Levels tasks into waves by topological sort; computes the critical path.
-5. Emits the cycle plan to `docs/plans/proposed/<YYYYMMDD-HHMM>-<slug>-<task-id>.md`
+5. **Appends the exit-gate task** — the last task of every cycle, depending on all the
+   others (see below).
+6. Emits the cycle plan to `docs/plans/proposed/<YYYYMMDD-HHMM>-<slug>-<task-id>.md`
    (`<task-id>` = the source tracker key, or `cycle` for free-text), recording
    `Slug` / `Task-id` / timestamp in the metadata header.
 
 Then it stops and presents the schedule. When in doubt about a conflict, it serializes.
+
+**The exit gate — every cycle's last task, emitted by default.** Each task in a cycle is
+verified against *its own base*. Nothing verifies the **union**: the interaction between
+tasks built in parallel, and the suites that don't run per-PR at all. That is a
+structural hole in per-PR CI, not a discipline problem — one cycle merged a migration
+that failed on **any fresh database**, because the only suite that would have caught it
+runs on a manual workflow input and was invisible to every task's gate.
+
+So the plan's final task depends on **every** other task and:
+
+- runs the repo's complete gate on the assembled cycle — lint, typecheck, unit,
+  **integration**, **e2e / real-service legs**, plus any codegen or contract-drift check;
+- proves the cycle's own end-to-end promise through **production code paths**, not mocks;
+- owns the cycle-level acceptance criteria that no single task owns;
+- touches **tests and harness only** — if proving the chain needs a production change,
+  that's a finding to report for re-planning, because an exit gate that edits what it
+  audits has stopped being a gate;
+- states plainly what it *cannot* prove locally (an emulator that enforces nothing is a
+  plumbing proof, not an enforcement proof — and saying so is the point).
+
+If your source plan already ends with an equivalent verification phase, the planner
+adopts it rather than adding a second one.
 
 ---
 

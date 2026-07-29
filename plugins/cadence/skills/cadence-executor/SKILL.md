@@ -540,9 +540,9 @@ to spawn, classify **every non-terminal task** with a reason it is not advancing
 | **`conflicted` / `behind`** — base moved under it (`DIRTY`/`BEHIND`/`CONFLICTING`, or `mergeable: UNKNOWN` unresolved) | ❌ **defect if it persists** | **highest priority: spawn its agent NOW**, every tick until clean. A conflicted PR is unreviewable *and* shows the wrong diff — it must never sit waiting for a human to notice |
 | `awaiting-human-decision` — an open blocking decision | ✅ | ensure it's in `attention`; remind per the decision rules |
 | `blocked-by-failed-dep` — a blocker is `failed` | ✅ | surface to the human; don't silently retry |
-| `waiting-for-blocker-branch` — blocker **not dispatched yet** | ✅ *only* until the blocker's own agent starts | it clears one tick later: an agent publishes its branch **before it writes any code** |
-| `waiting-for-blocker-branch` while the blocker **has** been dispatched | ❌ **defect** | the blocker's agent failed to publish its branch at spec start. Don't wait — surface it, and re-spawn the blocker so it pushes |
-| `awaiting-producer-code` — implementing, but a surface it consumes isn't on its base yet | ✅ while the blocker is actively building | nothing this tick; the blocker's next push moves its ref, which is a delta that re-spawns this task automatically. 3 ticks → `stalls[]` |
+| `awaiting-blocker-spec` — a blocker hasn't finished specifying | ✅ legitimate **sequence** | nothing; it clears when the blocker reaches `specified` and writes its handoff. Make sure the blocker itself is dispatched or in flight |
+| `awaiting-blocker-pr` — specs done, a blocker's PR isn't open yet | ✅ legitimate **sequence** | nothing; it clears when the blocker reaches `open`. The dependent already has its blocker's **contract** and can be specified meanwhile |
+| `blocker-branch-missing` — a dispatched blocker never published its branch | ❌ **defect** | the blocker's agent skipped the spec-start push. Re-spawn the blocker so it pushes; don't leave the dependent unable to cut a worktree |
 | **`waiting-for-merge`** — anything held because another PR hasn't merged | ❌ **defect** | **fix it now**: build/refresh the **join base**, merge the advancing base in, or re-target the PR — then dispatch |
 
 Rules:
@@ -556,6 +556,60 @@ Rules:
   say so rather than continuing to sleep quietly.
 - The audit is read-only bookkeeping over the task files + the change-detection
   snapshot. It never touches a PR.
+
+### Sequencing: a dependent follows its blocker's DECISIONS, then its CODE
+A dependency is not a scheduling nuisance to be optimised away — it exists because one
+task needs something another task **decides and builds**. Running them concurrently does
+not make the second one faster; it makes it *guess*. So a dependent is gated at two
+levels, and each gate clears on its blocker's **own progress**, never on a human's merge:
+
+| The dependent's… | is dispatchable once every blocker is… | because it needs… |
+|---|---|---|
+| **spec** | `specified` or later — its spec is done and its **handoff contract** is written | the *decided* interface, not a guess: the actual names, signatures, routes, entities and migrations the blocker committed to, plus its decisions and deviations from the plan brief |
+| **implement** | `open` or later — its **PR is open** (code complete, gate green, self-review done) | the *real* code to compile and test against, in its final reviewed-ready shape |
+
+- A `trivial` task **may only fuse** spec→implement when every blocker is already
+  `open`. Otherwise it stops at `specified` like everything else — fusing past a
+  sequencing gate is how a dependent ships against code that doesn't exist.
+- Both waits are **legitimate sequence**, not freezes, and the flow audit classifies
+  them as `awaiting-blocker-spec` / `awaiting-blocker-pr`. The difference from
+  `waiting-for-merge` — still a defect — is what clears them: another *agent's* work,
+  which is always in flight, versus a *human's* merge button, which may never come.
+- Tasks with no dependency between them still run fully parallel. This gate is per
+  edge, not per wave.
+
+> **Why this rule exists.** An earlier version let a dependent's spec run the moment its
+> blocker's branch existed. Its `verify-and-extend` pass then ran against a tree that did
+> not contain the blocker's work, so it planned against the brief alone and opened a PR
+> built on an interface nobody had decided yet. Parallelism bought nothing: the work had
+> to be redone against what the blocker actually built. **Sequence is the point of a
+> dependency edge** — the flow rule is "never wait for a *merge*", not "never wait".
+
+### Knowledge transfer: every agent lives one turn, so the handoff must be written down
+A task agent is spawned fresh, does one step, and dies. It has no memory of any other
+task, and its dependents' agents have no memory of it. So everything a blocker *learned*
+— the signature it settled on, the deviation from the plan's brief, the trap it hit — is
+lost at the end of its turn unless it is written down. The planner's brief is a
+**prediction** made before any code existed; the blocker's handoff is what is **true**.
+
+Each task agent writes a `handoff` into its own `tasks/<id>.json` at two points:
+
+- **`handoff.contract`, at the end of spec** — the surfaces it will produce (exact names,
+  signatures, routes, entities, migration names), the design decisions it took, anything
+  that **differs from the plan brief**, and what a dependent must know to build against
+  it.
+- **`handoff.delivered`, when its PR opens** — what actually shipped, with any drift from
+  its own contract called out, plus gotchas found while building (the setup step that is
+  required, the command that must be used, the ordering that matters).
+
+**The orchestrator passes every blocker's `handoff` verbatim in the dependent's brief**,
+alongside the plan's context brief, and says which is which. Where they disagree, **the
+handoff wins** — it describes code that exists; the brief describes code that was
+imagined. A dependent that finds the handoff wrong reports it rather than working around
+it. Log `handoff.written` when a handoff is recorded.
+
+This is the channel that makes sequencing worth waiting for: the dependent doesn't just
+get its blocker's *code*, it gets its blocker's *reasoning*.
 
 ### Branches are published at spec start — this is what makes the cycle flow
 The single ordering constraint in a cycle is **which branch a PR is based on**. So the
@@ -575,22 +629,26 @@ implements** rather than saving them for PR-creation.
 > it had a different name: `waiting-for-blocker-branch`, classified as legitimate.
 
 What this buys, and why it's safe:
-- **A dependent is dispatchable one tick after its blocker is dispatched**, not after it
-  finishes. In a chain, every task's expensive Opus spec phase runs in parallel.
+- **A dependent's base exists the moment it needs one** — it can cut its worktree the
+  instant it becomes dispatchable, instead of waiting for a branch to appear.
+- **It does NOT mean a dependent starts immediately.** Sequencing is governed by the
+  two-level rule below, not by branch availability. Publishing the branch removes a
+  mechanical wait; it does not license building against a task that hasn't decided
+  anything yet.
 - **An empty branch is inert** — identical to its base, no PR, not reviewed, invisible.
   It costs a ref.
-- **Producers arrive as commits, not as merges.** A dependent merges its base in at
-  implement start and checks the surfaces it consumes are actually present; if one isn't
-  yet, it builds everything else, pushes, records `implementBlockedOn` and returns.
+- **Producers arrive as PRs, not as merges.** A dependent implements once its blockers'
+  PRs are open — their code complete, gate green, self-review done — never once their
+  PRs are *merged*. That is the wait this design removes; the blocker's *build* is not.
 - **Nobody polls for it.** `refSnapshot` already watches every task branch, so a
   blocker's push moves its ref, and **a moved ref is a delta for every PR and task based
   on it, fanned out in the same tick**. The dependent is re-spawned automatically.
 - **Never force-push.** A dependent may already be based on what was pushed. Fix history
   forward with another commit.
 
-A dependent still parked on `waiting-for-blocker-branch` **after its blocker has been
-dispatched** is a defect, not patience: the blocker's agent failed to publish. Surface it
-and re-spawn the blocker.
+A dependent that cannot cut its worktree because its blocker's branch was never pushed —
+though the blocker has been dispatched — is a defect, not patience: the blocker's agent
+failed to publish. Surface it and re-spawn the blocker.
 
 ### Join base: how a 2+-blocker task starts without waiting
 A task with several blockers used to branch off integration — which does **not** yet
@@ -849,10 +907,12 @@ This is the only "work" the top orchestrator dispatches — it does NOT implemen
 poll, or fix anything itself. An **active** task is one not yet `done`/`failed` whose
 **base is available** — the integration branch (0 blockers), its single blocker's
 branch (stacked), or **every** blocker's branch existing so its join branch can be
-built (2+ blockers). **This is NOT "blockers merged"**, and it is not "blockers
-finished" either: agents publish their branches at spec start, so the branches a task
-depends on exist a tick after those tasks are *dispatched*. Work flows without waiting
-for merges **or for a blocker's gate, self-review and PR**.
+built (2+ blockers) — **and whose sequencing gate for its next phase has cleared**
+(spec needs every blocker `specified`+; implement needs every blocker `open`+; see
+**Sequencing**). **This is NOT "blockers merged"** — no task ever waits on a human's
+merge button. It *is* "blockers decided" before specifying and "blockers built" before
+implementing, because a dependency edge exists precisely so the second task can use what
+the first one worked out.
 
 **First: run Change detection** (one batched GraphQL call, diff vs `prSnapshot`),
 **then the Flow audit** (classify why each non-terminal task isn't advancing; convert
@@ -861,8 +921,9 @@ any `waiting-for-merge`). Then, of the active tasks, act ONLY on the **idle** on
 
 | Task status (idle, no agent in flight) | Spawn this tick (model) |
 |---|---|
-| `pending` (base available) | **spec agent** — verify-and-extend the brief, decides `complexity`; **fuses into implement for `trivial` only** (**opus/high**) → `specified` (or `open` when fused) |
-| `specified` | **implement agent** — sync base, verify its producers landed, TDD build → opens PR (**model = `modelPolicy[complexity]`**) → `open`. If a consumed surface isn't on its base yet it builds the rest, pushes, and returns `specified` with `implementBlockedOn` — re-spawned automatically when the blocker's ref moves |
+| `pending`, base available, **every blocker `specified`+** | **spec agent** — verify-and-extend the brief **against its blockers' handoff contracts**, decides `complexity`, writes its own `handoff.contract` (**opus/high**) → `specified`. **Fuses into implement only for `trivial` AND only when every blocker is already `open`** → `open` |
+| `specified`, **every blocker `open`+** | **implement agent** — sync base, verify its producers are actually present, TDD build → opens PR and writes `handoff.delivered` (**model = `modelPolicy[complexity]`**) → `open` |
+| `specified` with a blocker not yet `open` | **nothing — `awaiting-blocker-pr`**, legitimate sequence. It re-dispatches the tick its last blocker's PR opens |
 | `open` **with a snapshot delta** | **monitor agent** — Monitor pass on the settled PR (**sonnet/low**) |
 | `open`, no delta, but **readiness or auto-merge may now pass** (draft whose blocker just merged, approval recorded and guards satisfiable, a base that advanced) | **monitor agent** (**sonnet/low**) — the readiness / auto-merge / base-sync re-check is work even when the PR itself didn't change |
 | `open`, no delta, with an **open decision due for a reminder** | **monitor agent** (**sonnet/low**) — one reminder, then back to quiet |
@@ -884,6 +945,15 @@ under a plugin install that is `${CLAUDE_PLUGIN_ROOT}/skills/cadence-executor/re
 (touch set + requirements + acceptance criteria), its `runDir`/task-file path, the
 `integrationBranch`, the current `prTitlePattern`, and whether graphify is
 available (`preflight.graphify`).
+
+**And — for any task with blockers — every blocker's `handoff`, verbatim.** Read each
+blocker's `tasks/<id>.json` and paste its `handoff.contract` (and `handoff.delivered`
+once it exists) into the brief, labelled with the blocker's task id and PR number. Say
+explicitly which part of the brief is the **plan's prediction** and which is the
+blocker's **handoff**, and that **the handoff wins** where they disagree. This is the
+only channel between two agents that never share a context: without it the dependent
+re-derives its blocker's decisions from the plan doc and builds against an interface
+nobody actually chose.
 
 **Log a `task.spawn` event for EVERY agent you spawn** — spec, implement, monitor, fix,
 cleanup, and every ad-hoc one (repair, verification, housekeeping, reconciliation)

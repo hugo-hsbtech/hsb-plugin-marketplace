@@ -164,10 +164,20 @@ then uses it to pick the Implement agent's model. `agentKind` ∈
   instead (the old behaviour) forced every dependent to wait out its blocker's build,
   gate, self-review and PR body — a chain then ran strictly end to end, which is a
   freeze wearing the name `waiting-for-blocker-branch`.
-- `tasks/<id>.json.implementBlockedOn` — `{taskId, surface, note}` when an implement
-  agent found a surface it consumes not yet pushed to its base. It builds everything
-  else, pushes, records this, and returns to `specified`. **No polling:** the blocker's
-  next push moves its ref, which is a delta that re-spawns this task the same tick.
+- `tasks/<id>.json.handoff` — **the only channel between agents that never share a
+  context.** `{contract, delivered}`: `contract` is written at the end of the task's
+  spec (the exact surfaces it will produce — names, signatures, routes, entities,
+  migration names — plus its decisions and anything differing from the plan's brief);
+  `delivered` is written when its PR opens (what actually shipped, drift from its own
+  contract, and gotchas a consumer would otherwise rediscover). The orchestrator pastes
+  every blocker's handoff verbatim into a dependent's brief, and **the handoff outranks
+  the plan's brief** where they disagree — the brief predicted this code before it
+  existed; the handoff describes what is there.
+- `tasks/<id>.json.implementBlockedOn` — `{taskId, surface, expected, found}` when an
+  implement agent found a consumed surface missing or differing from its blocker's
+  `handoff.delivered`. Since implement only starts once every blocker's PR is open,
+  this is a **contract mismatch** to surface (`incident`, `kind: "contract.mismatch"`),
+  not a normal wait.
 - `modelPolicy` — model/effort by phase: **spec/analysis → opus, high effort
   (always)**; **implement** → high→opus/medium, medium/low/trivial→sonnet; **monitor/
   fix/cleanup** → sonnet, low effort. Think on Opus, do routine work on Sonnet — don't run
@@ -243,9 +253,12 @@ then uses it to pick the Implement agent's model. `agentKind` ∈
   `low`/`medium`/`high` all stop at `specified`. Fusing means one invocation on one
   model, and spec always runs on opus/high — so anything fused is *built* on Opus
   whatever its complexity says. That is worth it for a typo and nothing more.
-- `specified` — spec done, `complexity` written (`low`/`medium`/`high` — only `trivial`
-  fuses past this), **idle** → spawn an **implement** agent at
-  `modelPolicy[complexity]`.
+- `specified` — spec done, `complexity` and `handoff.contract` written (`low`/`medium`/
+  `high` — only `trivial` fuses past this, and only when its blockers are already
+  `open`), **idle** → spawn an **implement** agent at `modelPolicy[complexity]`
+  **once every blocker's PR is open**. Until then the task sits at `specified` as
+  `awaiting-blocker-pr` — legitimate sequence, not a stall: it clears on another
+  agent's work, never on a human's merge.
 - `implementing` — an implement agent is **in flight** (worktree+branch+code, pre-PR). Skip.
 - `open` — PR created (base = the task's `baseBranch`: integration, or its single
   blocker's branch when stacked — **a 2+-blocker task branches off its join but its PR
