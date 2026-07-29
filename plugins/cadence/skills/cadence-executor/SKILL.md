@@ -924,12 +924,38 @@ any `waiting-for-merge`). Then, of the active tasks, act ONLY on the **idle** on
 | `pending`, base available, **every blocker `specified`+** | **spec agent** — verify-and-extend the brief **against its blockers' handoff contracts**, decides `complexity`, writes its own `handoff.contract` (**opus/high**) → `specified`. **Fuses into implement only for `trivial` AND only when every blocker is already `open`** → `open` |
 | `specified`, **every blocker `open`+** | **implement agent** — sync base, verify its producers are actually present, TDD build → opens PR and writes `handoff.delivered` (**model = `modelPolicy[complexity]`**) → `open` |
 | `specified` with a blocker not yet `open` | **nothing — `awaiting-blocker-pr`**, legitimate sequence. It re-dispatches the tick its last blocker's PR opens |
+| **`open` whose PR you just saw MERGE** | **monitor agent** (**sonnet/low**) — a merge is a delta like any other. It does Cleanup, writes `tasks/<id>.json` (`merged` → `done`), and returns. **You never mark the task `done` yourself** |
 | `open` **with a snapshot delta** | **monitor agent** — Monitor pass on the settled PR (**sonnet/low**) |
 | `open`, no delta, but **readiness or auto-merge may now pass** (draft whose blocker just merged, approval recorded and guards satisfiable, a base that advanced) | **monitor agent** (**sonnet/low**) — the readiness / auto-merge / base-sync re-check is work even when the PR itself didn't change |
 | `open`, no delta, with an **open decision due for a reminder** | **monitor agent** (**sonnet/low**) — one reminder, then back to quiet |
 | `open` with **no delta** and nothing above | **nothing — quiet, skip** (record the quiet tick) |
-| `merged` | **cleanup agent** (**sonnet/low**) — recovery only: the normal path is the monitor agent doing cleanup in the tick that detects the merge; spawn this only if a cleanup was interrupted |
+| `merged` | **cleanup agent** (**sonnet/low**) — recovery only: the normal path is the monitor agent doing cleanup in the tick that detects the merge; spawn this only if a cleanup was interrupted (and only when `agentInFlight = false`) |
 | `specifying` / `implementing` / `fixing` | **nothing — agent already in flight, SKIP** |
+
+> **A DETECTED MERGE IS A DELTA, NOT A CONCLUSION — you do not retire a task by yourself.**
+> Seeing `mergedAt` appear in the snapshot is the *start* of the task's last step, not the
+> end of it. Cleanup (remove the worktree, delete the branch, retire the join, sync the
+> tracker) and the final `tasks/<id>.json` write both belong to the task's own agent —
+> the sole writer of that file. So a merge you detect means **spawn exactly one monitor
+> agent**, then record `done` only once it returns having written the file.
+>
+> Both halves of this failed in one production cycle, in both directions. Four tasks
+> (T1, T4, T6, T12) were marked `done` on merge-detection with **no agent spawned at
+> all**: their worktrees sat on disk for the rest of the run, their `handoff.delivered`
+> was never captured for their dependents, and `tasks/T12.json` still read
+> `status: "open"` long after its PR had merged — state lying for hours, found only
+> because the user happened to ask about an unrelated task's retirement. Then, twice
+> (T2, T15), a cleanup agent was spawned **alongside the task's still-live agent**, and
+> both wrote the same task file concurrently. So, explicitly:
+>
+> - **Never write `tasks/<id>.json` yourself** — not to mark `done`, not to "just fix"
+>   a stale status. Spawn the agent that owns it.
+> - **Never spawn a cleanup agent for a task with `agentInFlight = true`** — the live
+>   agent finishes its own cleanup. Idle-gating has no exception for cleanup.
+> - **Never spawn a cleanup agent alongside a monitor agent** for the same task. One
+>   agent per task per tick, always.
+> - A task whose PR merged but whose file still reads `open`/`fixing` after its agent
+>   returned is an **`incident`** (`kind: "orchestrator.error"`), not a tidy-up.
 
 **Hard requirement: exactly one `Agent` (`general-purpose`) call per *idle active*
 task with work, all in a single message** so they run concurrently. **Set each
@@ -986,11 +1012,27 @@ was in fact spawning dozens of agents. There is no such thing as an unlogged spa
 >   in your PR body." · ✅ "Check whether `CLAUDE.md` is generated before editing it —
 >   `build-agents.ts` writes a specific set of artifacts; verify which."
 >
-> If you *must* pass on a number (from a plan, a prior agent, a report), label it
-> **unverified** and name its source, and instruct the agent to verify before relying
-> on it. An agent that finds a brief's claim false should **decline and report it** —
-> that is the correct behaviour, not insubordination; record it as an `incident` with
-> `kind: "brief.false-premise"` and correct the brief.
+> **The same rule covers OBSERVATIONS, not just numbers.** A number you computed and a
+> state you observed fail identically: both were true when you looked and are asserted as
+> true when the agent acts, minutes or hours later. In the same production cycle the
+> orchestrator told a task that the compose `db` container was running — true when it was
+> measured, false by the time the agent used it. So never state the current condition of
+> anything **you are not the owner of and cannot re-check for the agent**: a service being
+> up, a port being free, a branch's contents, a file's existence, a check's result, "the
+> tree is clean", "that dependency is already installed". Those are things the agent is
+> standing next to and you are not.
+>
+> - ❌ "The compose `db` is up." · ❌ "The branch has no commits yet."
+>   ❌ "`pnpm install` has already been run in that worktree."
+> - ✅ "This task needs a live Postgres — bring up compose `db` yourself and confirm it
+>   before you rely on it." · ✅ "Check the branch's contents yourself; do not assume."
+>
+> If you *must* pass on a number **or an observation** (from a plan, a prior agent, a
+> report), label it **unverified**, name its source **and when it was observed**, and
+> instruct the agent to verify before relying on it. An agent that finds a brief's claim
+> false should **decline and report it** — that is the correct behaviour, not
+> insubordination; record it as an `incident` with `kind: "brief.false-premise"` and
+> correct the brief.
 
 **Before spawning a `pending` task's first agent, check nobody else already took it.**
 Two orchestrators on one task is how duplicate PRs and lost work happen, and in
@@ -1032,6 +1074,20 @@ After the tick's per-task agents return, the top orchestrator does only bookkeep
   blocker's branch when stacked; all blockers' branches, joined, for 2+). A dependent
   is dispatched right after its parents' branches are pushed — it does NOT wait for
   their PRs to merge. Never freeze a wave waiting on another wave's merges.
+  > **AN EMPTY BRANCH IS A VALID BASE — accept it, that is the whole point.** Task agents
+  > publish their branch at spec start, deliberately empty, *because* that is what makes
+  > their dependents dispatchable. "Exists" means the ref is on the remote — **not that it
+  > has commits**, not that it differs from its base, not that its PR is open. Withholding
+  > a dispatch because a blocker's branch "has nothing in it yet" re-creates the exact
+  > freeze the publish-at-spec-start rule exists to kill, and it wears a different name so
+  > every rule written against merge-waiting slides past it. It happened in production:
+  > an agent pushed an empty branch precisely to open the gate, the orchestrator judged
+  > that unsafe and held the dependent, and a `low`-complexity task's Opus spec was
+  > serialised behind its blocker's entire implement + gate + self-review + PR write-up.
+  > `waiting-for-blocker-branch` against a branch that is already on the remote is a
+  > **defect** — log an `incident` (`kind: "orchestrator.error"`) if you catch yourself
+  > doing it. What governs *when* a dependent may start is the **sequencing gate**
+  > (blockers `specified`+ to spec, `open`+ to implement) — never the emptiness of a ref.
 - **Sync, don't block, when a base advances:** when a blocker's branch gets new commits
   or merges, the dependent task's agent **merges the updated base in** (never a rebase,
   never a force-push on an open PR) — or refreshes/retires its join branch — on its next
@@ -1108,6 +1164,29 @@ their own append-only log (same single-writer rule as the state files):
 `events/run.jsonl` (yours) and `events/<id>.jsonl` (each task agent's). One JSON line per
 event: `{ts, actor, kind, detail, pr?, url?, sha?, model?}`.
 
+> #### EVERY TIMESTAMP COMES FROM `date -u` — NEVER FROM YOUR HEAD
+> **You do not have a clock.** Any time you write from memory or inference is a guess
+> that looks authoritative, and it silently corrupts every duration the report computes
+> from it. Get the value from the shell, always:
+>
+> ```bash
+> date -u +%Y-%m-%dT%H:%M:%SZ
+> ```
+>
+> That applies to **every** `ts` you append and every timestamped field you write to
+> `run.json` (`nextWakeupAt`, `agentStartedAt`, `unknownSince`, `pinnedAt`, …). Never
+> compose one, never carry one forward from an earlier turn as "now", and never write
+> local time with a `Z` on it — `Z` means UTC and nothing else. In production an entire
+> run's orchestrator- and agent-written timestamps were **local time suffixed `Z`**, off
+> by three hours from GitHub's: internally consistent, absolutely wrong, and it made
+> every per-task duration in the report unusable — several tasks recorded a `readyAt`
+> that *postdated their own `mergedAt`*. Nothing caught it, because a wrong clock that
+> agrees with itself looks fine.
+>
+> **GitHub's timestamps are authoritative** where both exist. When you record an event
+> that GitHub also stamps (a merge, a PR open, a review), prefer the value from `gh`
+> over your own `date -u`, and never mix the two sources inside one duration.
+
 **`run.json` and `tasks/<id>.json` are overwritten in place — they say what is true
 now, never what happened. The event log is the ledger, and it is the only one.** So:
 **if you wrote a field, you owe an event.** Every task `status` transition emits
@@ -1133,8 +1212,49 @@ Log the moment it happens — spawns, complexity decisions, PR opened/ready/re-d
 decisions raised/answered, reviews and fix rounds, CI flips, base syncs, conflicts and
 how they were resolved, silent re-targets, scope checks, joins, guard blocks,
 auto-merges, merges, stalls, escalations, failed gates, and one `tick` line per
-wake-up. The full kind list and the rendering rules are in
+wake-up. The rendering rules and the task-agent kinds are in
 **`references/cycle-report.md`**.
+
+> #### THE KIND VOCABULARY IS CLOSED — NEVER INVENT ONE
+> The report is rendered by looking events up **by `kind`**. A kind nobody recognises is
+> not a richer log, it is a **lost** event: it renders nowhere, and the section it should
+> have fed reads `not captured` while the line sits there in the file. In production the
+> orchestrator invented `cadence.defect`, `merge.executed`, `policy.skew` and
+> `wave.dispatched` — every one of which already had a canonical kind (`incident`,
+> `automerge`, `policy.pinned`, `task.spawn`) — so a run with nine recorded Cadence
+> defects, a merge executed under a user grant, and a mid-run version skew rendered a
+> report that could not show any of them from the log. Two more were *mis*-labelled: a
+> `pr.redraft` that was a PR-body correction, and a `gate.failed` whose own detail said
+> *"NOT a failure"*.
+>
+> **These are the kinds YOU (the orchestrator) write.** Use one of these or none:
+>
+> | Kind | You log it when |
+> |---|---|
+> | `run.opened` / `run.preflight` | the run opens; the preflight gate passes/fails (which checks, `graphify` ok/absent) |
+> | `policy.pinned` | merge policy/topology is pinned at run open, **or** a version skew is detected on resume |
+> | `task.spawn` | **any** agent is spawned — spec/implement/monitor/fix/cleanup *and* every ad-hoc repair, verification, housekeeping or reconciliation agent (`agentKind`, `model`, effort) |
+> | `state.changed` | you record a task `status` transition (`from` → `to`, trigger) |
+> | `snapshot.delta` | change detection sees PR fields move (`fields`, `old` → `new`) |
+> | `base.moved` | a watched ref's head OID changes — integration, a task/join branch, or `main` (name the dependents it fans out to) |
+> | `flow.converted` | the flow audit converted a `waiting-for-merge` (how) |
+> | `stall` | the flow audit records a 3-tick stall on the same reason |
+> | `escalation` | a task is re-spawned a model tier up, or a stale lease is recovered |
+> | `task.failed` | a task is given up on, with the blocker |
+> | `tick` | **every** wake-up, quiet ones included |
+> | `incident` | **anything Cadence got wrong** — sub-`kind`: `brief.false-premise` · `topology.skew` · `task.collision` · `orchestrator.error` · `external.merge` · `contract.mismatch` · or a new sub-kind naming what it actually was |
+>
+> The task agents own the rest (`pr.*`, `review.*`, `ci.*`, `decision.*`, `automerge`,
+> `merged`, `conflict*`, `scope.*`, `join.*`, `handoff.written`, `branch.published`,
+> `guard.blocked`, `gate.failed`, `comment.answered`, `fix.pushed`, `basesync`,
+> `task.complexity`) — see `references/cycle-report.md` for those. **Never write another
+> task's kinds yourself**, and never write a kind that appears in neither list.
+>
+> **If nothing fits, the answer is `incident` with a new sub-`kind`** — never a new
+> top-level kind. `incident` is the one open-ended slot precisely so the vocabulary can
+> stay closed. And **make the `kind` match the `detail`**: if the sentence you are about
+> to write says the thing was not a redraft, not a failure, not an error, then you have
+> the wrong kind — pick the one that describes what actually happened.
 
 From those logs Cadence renders **`<runDir>/report.md`** — a single self-contained file
 the human can read or paste to anyone: outcome, a per-task table, a **per-task ledger** (every state and

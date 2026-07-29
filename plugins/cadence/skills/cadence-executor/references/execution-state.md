@@ -404,6 +404,12 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
   the agent un-drafts itself the moment it passes — the user is never asked. `draftReason`
   records which item failed so the run summary can report the truth; `readyAt` stamps
   the un-draft.
+  > **Every timestamped field in this file — `readyAt`, `specifiedAt`, `lastCheckedAt`,
+  > `approvedAt`, `agentStartedAt`, `nextWakeupAt`, `unknownSince`, and any other — is
+  > produced by `date -u +%Y-%m-%dT%H:%M:%SZ`, never composed from memory.** A `Z` on a
+  > local time is false and corrupts every duration the cycle report computes; in
+  > production it produced task files whose `readyAt` postdated their own `mergedAt`.
+  > Where GitHub stamps the same moment, GitHub's value wins.
 - `pendingDecisions` — questions that genuinely need a human (product/policy intent,
   ambiguous criteria, irreversible or security-relevant choices), each posted on the PR
   as an answerable numbered comment with options and a provisional default, pinned in

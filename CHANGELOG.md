@@ -9,7 +9,50 @@ Releases of the plugins in this marketplace. Versions are **per plugin** and tag
 
 ## Unreleased
 
-_Nothing yet._
+### cadence — the log the report is rendered from
+
+Feedback from the second real cycle (`voucher-phase2-c2-statements-dashboards`, 16 tasks,
+16 merged, 0 failed, 4h 16m). The cycle **opened under 3.6.0** and was upgraded to
+3.11.0 mid-run, so most of its capture complaints were already fixed before the report
+was written — see `docs/feedback/20260729-second-cycle-report.md` for what was declined
+and why. What survived verification is five defects, all of which corrupted either the
+run's durable state or the report rendered from it.
+
+- **The event-kind vocabulary is closed, and it is now visible where events are written.**
+  The orchestrator invented `cadence.defect`, `merge.executed`, `policy.skew` and
+  `wave.dispatched` — all four already had canonical kinds — and mislabelled two more.
+  Because the report looks events up by `kind`, an invented kind is a *lost* event: nine
+  recorded Cadence defects, a merge under a user grant and a mid-run version skew all
+  rendered `not captured` from a log that contained them. `SKILL.md` now carries an
+  inline roster of the **orchestrator's own** kinds (the reference was only opened at
+  render time, too late to help), a hard "never invent a kind — fall back to `incident`
+  with a sub-`kind`" rule, and a "make the kind match the detail" rule. Same for the task
+  agent in `task-agent.md`.
+- **Every timestamp comes from `date -u`.** An entire run's orchestrator- and
+  agent-written timestamps were local time suffixed `Z` (−3h off GitHub's): internally
+  consistent, absolutely wrong, and it made every per-task duration unusable — several
+  tasks recorded a `readyAt` that postdated their own `mergedAt`. Every `ts` and every
+  timestamped state field now comes from `date -u +%Y-%m-%dT%H:%M:%SZ`; GitHub's stamp
+  wins where both exist; and the renderer sanity-checks for impossible orderings and
+  emits `not captured` rather than quietly reconciling the two clocks with an offset.
+- **A detected merge is a delta, not a conclusion.** Four tasks were marked `done` on
+  merge-detection with no agent spawned at all — worktrees left on disk,
+  `handoff.delivered` never captured for their dependents, and one task file still
+  reading `status: "open"` hours after its PR merged. Twice, a cleanup agent was spawned
+  *alongside* the task's still-live agent and both wrote the same file. The orchestrator
+  now never writes a task file or retires a task itself: a merge spawns exactly one
+  monitor agent, which does cleanup and writes the file. **Idle-gating has no exception
+  for cleanup.**
+- **The orchestrator must accept an empty branch as a valid base.** "Branches are
+  published at spec start" was written only to the task agent, so the other half broke:
+  an agent pushed an empty branch precisely to open the gate, the orchestrator judged it
+  unsafe, and a `low`-complexity task's Opus spec was serialised behind its blocker's
+  entire implement + gate + self-review + PR write-up. "Exists" now explicitly means the
+  ref is on the remote — not that it has commits.
+- **"State the rule, never the derived number" now covers stale observations.** The
+  orchestrator told a task the compose `db` container was running: true when measured,
+  false when used. A number you computed and a state you observed fail identically, so
+  the invariant now names both.
 
 ---
 

@@ -24,6 +24,32 @@ an unlogged event is simply lost: **log the bad ones too** (re-drafts, failed ga
 blocked merges, parked reviewers). Schema and kinds:
 `references/cycle-report.md`.
 
+> ### EVERY TIMESTAMP COMES FROM `date -u` — AND THE KIND MUST MATCH THE DETAIL
+> **You have no clock.** Get every `ts` you append, and every timestamped field you write
+> to your task file (`specifiedAt`, `readyAt`, `lastCheckedAt`, `approvedAt`, …), from
+> the shell:
+>
+> ```bash
+> date -u +%Y-%m-%dT%H:%M:%SZ
+> ```
+>
+> Never compose one from memory or inference, and never write local time with a `Z` on
+> it — `Z` means UTC and nothing else. In production a whole run's agent-written
+> timestamps were local time suffixed `Z` (three hours off GitHub's), which made every
+> per-task duration in the report unusable: several tasks recorded a `readyAt` that
+> *postdated their own `mergedAt`*. Where GitHub also stamps the moment (PR opened,
+> merged, review submitted), take **GitHub's value** from `gh` — it is authoritative —
+> and never mix the two sources inside one duration.
+>
+> **The `kind` vocabulary is closed: never invent one.** The report looks events up by
+> `kind`, so an unrecognised kind is a *lost* event, not a richer log. Use a kind from
+> the list above (or from `references/cycle-report.md`); if genuinely nothing fits, log
+> an `incident` with a descriptive sub-`kind` — that is the one open-ended slot. And make
+> the kind **match what you are about to write**: a `pr.redraft` whose detail says you
+> only corrected the PR body, or a `gate.failed` whose detail says *"NOT a failure"*,
+> are both the wrong kind — pick the one that describes what actually happened. (Both of
+> those were logged in production, and both corrupted the report's health counts.)
+
 You are **resumable and idempotent**: begin by reading your `tasks/<id>.json` and do
 only the step your current `status` calls for, then write your own task file and
 return. You are the **sole writer of your `tasks/<id>.json`** and the only one

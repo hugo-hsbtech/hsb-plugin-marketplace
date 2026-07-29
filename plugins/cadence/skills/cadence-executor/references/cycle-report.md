@@ -29,6 +29,11 @@ One event per line, appended (never rewritten), small enough to append atomicall
 Fields: `ts` (ISO-8601, UTC), `actor` (`orchestrator` or the task id), `kind`, `detail`
 (one plain sentence), plus whichever of `pr`, `url`, `sha`, `model`, `ms`, `count` apply.
 
+**`ts` is produced by `date -u +%Y-%m-%dT%H:%M:%SZ`, never composed from memory** — by
+the orchestrator and by every task agent alike. A model-written clock read is a guess
+that looks authoritative; a `Z` on a local time is simply false. See the timestamp rules
+in `SKILL.md` (Evidence capture) and `task-agent.md`.
+
 **Event kinds to log** — the left column is what the report is built from, so log the
 event the moment it happens, not at the end:
 
@@ -116,6 +121,27 @@ ask where the report is, or discover it only by looking.
 **How:** read `run.json`, every `tasks/<id>.json`, and every `events/*.jsonl`, merge the
 events by `ts`, and fill the template below. Compute durations from the events; leave a
 field as `not captured` rather than estimating one.
+
+> ### SANITY-CHECK THE CLOCKS BEFORE YOU RENDER A SINGLE DURATION
+> Locally-written timestamps can be wrong (see the `date -u` rule above), and a wrong
+> clock that agrees with itself renders as a confident, false number. So before computing
+> anything, check the merged event stream for **impossible orderings** and refuse to
+> render across them:
+>
+> - an event that precedes the run's own `run.opened`;
+> - a task's `specifiedAt` / `readyAt` that **postdates** a later-stage stamp
+>   (`readyAt` > `mergedAt`, `specifiedAt` > `readyAt`, an event after `merged`);
+> - a locally-written `ts` that disagrees with the **GitHub** timestamp for the same
+>   moment by a whole number of hours — that is a timezone bug, not latency;
+> - any negative duration.
+>
+> **A duration derived from a suspect pair renders `not captured`, never a number** —
+> and the report says why, once, in *What went wrong*: "orchestrator/agent timestamps are
+> local time labelled `Z` (offset −Nh); GitHub-sourced timestamps are authoritative and
+> unmarked; locally-derived durations are omitted." Mark any timestamp you kept from a
+> suspect source with an asterisk and footnote it. **Never quietly reconcile the two
+> clocks by applying an offset** — you would be inventing the very numbers the `not
+> captured` rule exists to prevent. Where both exist, GitHub wins.
 
 **Tone:** flat and factual. This report is how the human learns what to fix — in their
 process *and* in this plugin — so **it must be as specific about Cadence's own failures
