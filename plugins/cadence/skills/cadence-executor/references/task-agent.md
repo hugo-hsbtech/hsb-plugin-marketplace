@@ -31,13 +31,28 @@ running `gh` for your PR. You never write `run.json`, never touch another task's
 branch/worktree/PR, and never push or commit to `main`. **On every status change,
 run the Issue-tracker status sync** (bottom of this file) if the task is linked.
 
+> ### YOUR TASK FILE IS WRITTEN BEFORE YOU RETURN — no exceptions
+> `tasks/<id>.json` is the only durable record of your task, and you are its **sole
+> writer**. The orchestrator cannot write it for you and will not go looking on GitHub
+> to find out what you did. **Never return — successfully, early, or on a failure —
+> without first writing your current `status` and everything you learned this
+> invocation** (PR number/URL, branch, `baseBranch`, `complexity`, `isDraft` +
+> `draftReason`, decisions, approvals, `filesChanged`, `scopeCheck`, `lastCheckedAt`),
+> and appending the matching events to `events/<id>.jsonl`.
+>
+> In production an implement agent opened its PR, saw it merged, and returned without
+> ever updating its task file: for the rest of the run the state said "still
+> specifying, nothing implemented, nothing merged" while the PR had long since landed,
+> and it had to be reconciled by hand against `gh`. **A step you completed but did not
+> write down did not happen.** Write the file, then return.
+
 ## Resume dispatch (first thing you do)
 
 - `status = pending` (or no file yet) → set `status = specifying`, run the **Spec
-  phase** → write the `complexity` finding + plan. If complexity is `high` or
-  `medium`, end at `status = specified` and return. If **`trivial` or `low`, do NOT
-  return — continue straight into the Implement phase in this same invocation**
-  (the fused fast path) and end at `status = open`.
+  phase** → write the `complexity` finding + plan. If complexity is `high`,
+  `medium`, or `low`, end at `status = specified` and return. **Only if `trivial`,
+  do NOT return — continue straight into the Implement phase in this same
+  invocation** (the fused fast path) and end at `status = open`.
 - `status = specifying` → spec was interrupted → resume the Spec phase (same fused
   rule applies).
 - `status = specified` → set `status = implementing`, run the **Implement phase** →
@@ -55,13 +70,17 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
   orchestrator stops re-spawning you).
 - `status = done`/`failed` → nothing; you should not have been spawned.
 
-> **Why the fused fast path exists:** for a `trivial`/`low` task, spawning a second
-> agent to implement costs more than the implementation itself — the fresh agent
-> re-reads everything you already have in context. You already hold the analysis,
-> the worktree, and the branch; finishing the small change here is both cheaper and
-> better (it runs on the spec model). `medium`/`high` tasks always return at
-> `specified` so the orchestrator can spawn the implement agent on the right model
-> tier.
+> **Why the fused fast path exists, and why it stops at `trivial`:** for a `trivial`
+> task — a typo, a lint fix, a comment — spawning a second agent costs more than the
+> change itself; you already hold the analysis, the worktree, and the branch, so you
+> finish it here.
+>
+> It goes no further **because fusing forfeits the model tier**. You are running on the
+> spec model (opus/high) and one invocation is one model, so anything you fuse is built
+> on Opus regardless of what its `complexity` says. When `low` fused too, the cheapest
+> tasks in a cycle ran on the most expensive model while `medium` ran on Sonnet — the
+> cost curve inverted, and cycles ran nearly all-Opus. So `low`, `medium`, and `high`
+> all return at `specified` and get their own implement agent at the right tier.
 
 ## Spec phase (analysis + plan; spawned on opus/high, every task)
 
@@ -170,8 +189,10 @@ run the Issue-tracker status sync** (bottom of this file) if the task is linked.
      change with **no logic/behavior change** — a typo, lint/formatting fix, or
      comment/doc-only edit; anything that alters behavior is at least `low`.
 
-   Then: `high`/`medium` → write the plan, set `status = specified`, return.
-   `trivial`/`low` → set `status = implementing` and continue below (fused path).
+   Then: `high`/`medium`/`low` → write the plan, set `status = specified`, return
+   (the orchestrator spawns the implement agent at that tier — `low` runs on
+   sonnet/low, and that saving is the point). **Only `trivial`** → set
+   `status = implementing` and continue below (fused path).
 
 ## Open decisions (a question for the human must be ANSWERABLE, or it isn't asked)
 
@@ -258,8 +279,8 @@ shipped and how to change it, and report it in your return summary as
 ## Implement phase (TDD → PR; spawned at modelPolicy[complexity], or fused)
 
 3. **Implement (TDD).** Execute the plan via `executing-plans` /
-   `subagent-driven-development` with `test-driven-development` — for a
-   `trivial`/`low` fused run, implement directly with TDD, no sub-orchestration.
+   `subagent-driven-development` with `test-driven-development` — for a `trivial`
+   fused run, implement directly with TDD, no sub-orchestration.
    Honor all repo `CLAUDE.md` rules and invoke required project skills
    (migrations, etc.).
 4. **Verify.** Run the repo's lint/format/tests gate (per `CLAUDE.md`). Use
@@ -291,20 +312,29 @@ shipped and how to change it, and report it in your return summary as
    never another task's branch), and open **this task's own** PR **targeting its
    `baseBranch`**:
    `gh pr create --base <baseBranch> --head <branch> --title "<title>"` — that base
-   is the integration branch (no blockers), the single blocker's branch (stacked), or
-   your join branch (2+ blockers). Resolve `<title>` via the **PR title convention**
-   (below). Never
-   `--base main` for a task. Do not append your changes onto a sibling task's
-   branch/PR (unless this task qualifies for the trivial-fold exception, which the
-   top orchestrator decides — a task agent always defaults to its own PR).
+   is the integration branch (no blockers) or the single blocker's branch (stacked).
+
+   > **If you built a join branch (2+ blockers), your PR base is the INTEGRATION
+   > BRANCH — never the join.** You *branched off* the join so your code compiles
+   > against your blockers; you *target integration* so the work actually reaches the
+   > cycle. A join has no PR of its own and is never a merge target, so a PR pointed at
+   > one delivers its work into a dead end: in production four PRs merged into their
+   > joins, vanished from integration, and needed three recovery PRs to get back. Set
+   > `--base <integrationBranch>` and say in the body that the diff temporarily
+   > includes unmerged blockers' files — it shrinks by itself as they land.
+
+   Resolve `<title>` via the **PR title convention** (below). Never `--base main` for a
+   task. Never append your changes onto a sibling task's branch/PR — one task, one
+   branch, one PR, always.
    **Stamp your identity on the PR so nobody has to ask which task it is:**
    - the **first line of the body** is the identity header — in *both* body sizes:
      `**T2 · Wire the matcher into the inbound pipeline** — cycle \`<slug>\` · plan PR
      #<planPrNumber> · <tracker key, if any> · base \`<baseBranch>\` (stacked on
      #<basePr> — merge after it / join of #A + #B / the integration branch)`.
      Omit tokens that don't exist; never invent a ticket key.
-   - apply the run's cycle label: `gh pr edit <n> --add-label "cadence:<slug>"`
-     (best-effort — if `run.json.cycleLabel` is `"unavailable"`, skip it silently).
+   - **no labels, ever** — do not `--add-label`, do not `gh label create`, and do not
+     ask for a label to be created. The repo's label set belongs to its humans; your
+     identity header and the plan PR's cycle map are what make the PR findable.
    - return your `{id, title, prNumber}` so the orchestrator can add your row to the
      plan PR's cycle map.
 
@@ -325,7 +355,16 @@ shipped and how to change it, and report it in your return summary as
    >
    > **Checklist — all five true → `gh pr ready <n>`:**
    > 1. no work of yours still in flight (you're about to return),
-   > 2. local gate green (lint/format/tests) **and** no failing CI check,
+   > 2. local gate green (lint/format/tests) **and CI terminal-and-green on your
+   >    CURRENT head SHA** — every check reported, none `QUEUED`/`IN_PROGRESS`/
+   >    `PENDING`, none failed. **"No failing check" is NOT the test**: an empty or
+   >    not-yet-created check set has no failing check either, and un-drafting on it
+   >    invites review onto code nothing has verified (this shipped twice in
+   >    production — once on "no CI checks report on this branch", once with two
+   >    checks still `QUEUED`). Not terminal yet → stay draft with
+   >    `draftReason: "ci_pending"`; the next tick un-drafts you when it goes green.
+   >    Only a repo you have *confirmed* has no CI at all is exempt (record
+   >    `ciExpected: false` and why),
    > 3. the pre-push self-review ran for this `complexity` (`trivial` → not required),
    > 4. **no unanswered blocking open decision**,
    > 5. the PR body is written to the standard (what & why, how to test, decisions).
@@ -356,6 +395,26 @@ shipped and how to change it, and report it in your return summary as
 Runs only when the task is **idle and `status = open`** (PR up, no agent was in
 flight). Never during a build or while another fix round-trip is in flight. Runs in
 the task's own worktree; writes its own `tasks/<id>.json`. For this task's PR `<n>`:
+
+> ### NEVER WAIT INSIDE A TICK — observe, act, return
+> **A monitor pass is one observation and at most one round of action. It never
+> sleeps, never polls, never loops "until CI finishes", and never waits for anything
+> to change.** If CI is still running, that IS your answer: return immediately with
+> `prState = ci_pending`. If a base sync is still settling, return. If you are waiting
+> on a human, return. Waiting is the orchestrator's job — it owns the adaptive backoff
+> and will re-spawn you on the next tick, when the thing you were waiting for has
+> actually happened.
+>
+> In production a monitor agent did its base-sync correctly and then entered a
+> wait-for-CI loop instead of returning a verdict. It re-notified four times, produced
+> no action, burned roughly **80k subagent tokens per pass**, and had to be killed with
+> `TaskStop`. It learned nothing that the next tick would not have learned for free.
+> The loop is pure waste: your context is expensive and the orchestrator's sleep is
+> free.
+>
+> Concretely, inside a tick: no `sleep`, no retry-until-green loop, no re-running the
+> GraphQL call hoping for a different answer, no "wait a moment and check again". One
+> fetch, judge, act on what is actionable now, write your task file, return.
 
 > ### NO SILENT FIXES (invariant — this is the bug this section exists to kill)
 > **Every fix MUST be announced on the PR with a real `gh` post, and the post MUST
@@ -689,7 +748,7 @@ the task's own worktree; writes its own `tasks/<id>.json`. For this task's PR `<
    SILENT FIXES assertion, then **return** your summary `{id, status, prNumber,
    merged?, autoMerged?, renamedTitle?, prState, openDecisions, note}`. `prState` is
    the TRUE state observed this tick — one of `changes_requested | awaiting_review |
-   awaiting_human_decision | ci_red | conflict | approved_awaiting_base |
+   awaiting_human_decision | ci_pending | ci_red | conflict | approved_awaiting_base |
    approved_green_awaiting_merge |
    auto_merged | merged` — so the orchestrator/console reports reality (e.g. "awaiting
    review", not "awaiting merge"). Only emit `approved_green_awaiting_merge` when

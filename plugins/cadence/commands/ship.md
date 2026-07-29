@@ -6,10 +6,20 @@ argument-hint: "<path to a cycle-plan .md (docs/plans/proposed/<datetime>-<slug>
 Load and follow the `cadence-executor` skill (plugin `cadence`) to autonomously execute
 a parallel cycle plan. This **implements and drives PRs to merge-ready and FLOWS end
 to end** — it never freezes a task waiting for another's PR to merge (dependencies are
-expressed by PR base: stacked on a single blocker, a **join branch** carrying all
-blockers for a multi-blocker task, else the integration branch). Hard rules: **never
-push or commit to `main`; never merge the plan PR (that gate is the human's); merge a
-task PR only under an intact human approval or an explicit user grant; a PR is a draft
+expressed by PR base: stacked on a single blocker, else the integration branch — a
+multi-blocker task *branches off* a **join branch** carrying all its blockers but its
+**PR targets integration, never the join**). Hard rules: **never push or commit to
+`main`; never merge the plan PR (that gate is the human's); merge a task PR only under
+an intact human approval or an explicit user grant —**
+
+> **and on a run that is already open, `run.json` wins over this text.** The merge
+> policy, draft/readiness semantics, `main` safety and the branch topology are **pinned
+> at run open**. If this command's description and the pinned policy disagree — because
+> the plugin was upgraded mid-run, or because the user set a different policy for this
+> cycle — **the pinned policy is the one in force**, and it is not re-litigated on a
+> resume. Note the skew once and carry on. Only the user changes a live run's policy.
+
+Continued hard rules: **a PR is a draft
 only while it is genuinely not reviewable — that call is yours, never the user's; and
 keep monitoring each PR while it is open.**
 
@@ -56,13 +66,14 @@ the per-task playbook.
    resolves), and a PR that is **conflicted/behind** (top priority, every tick until
    clean, and the run stays HOT). Then spawn one `Agent` per IDLE active task with work, in a single
    message — `pending`→spec (verifies-and-extends the plan brief instead of
-   re-analyzing; **fuses straight into implement for `trivial`/`low` complexity**),
+   re-analyzing; **fuses straight into implement for `trivial` complexity only**),
    `specified`→implement, `open` **with a delta**→monitor, `merged`→cleanup
    (recovery only); **skip any task whose agent is still running**
    (`specifying`/`implementing`/`fixing`) so you never tick a PR mid-round-trip
    (idle-gating). **Pick each agent's model by phase:** spec/analysis → **Opus, high
    effort** (always); implement → by the complexity the spec found (high → Opus/medium,
-   medium → Sonnet; trivial/low is normally absorbed by the fused spec agent);
+   medium and low → Sonnet; only `trivial` is absorbed by the fused spec agent, because
+   fusing means the change is built on the spec model whatever its tier says);
    monitor/cleanup → Sonnet. Don't run everything on Opus, and
    don't run analysis on a cheap model. Spec/implement/fix agents run in the background.
    Each agent

@@ -403,7 +403,7 @@ flowchart TD
   CONV --> G
   G -->|"no — agent owns it,<br/>or parked on a human"| SKIP["skip"]
   G -->|yes| SP["spawn ONE agent for its next phase"]
-  SP --> A1["spec<br/>(fuses into implement<br/>for trivial/low)"]
+  SP --> A1["spec<br/>(fuses into implement<br/>for trivial only)"]
   SP --> A2["implement"]
   SP --> A3["monitor<br/>(delta · readiness/merge guards ·<br/>base advanced · decision reminder)"]
   SP --> A4["cleanup"]
@@ -447,8 +447,8 @@ advances its task exactly one step per tick and does all its own `gh` work.
 stateDiagram-v2
   [*] --> pending
   pending --> specifying: spec agent (Opus/high)
-  specifying --> specified: complexity = medium/high
-  specifying --> open: fused fast path — trivial/low<br/>(same agent implements + opens PR)
+  specifying --> specified: complexity = low/medium/high
+  specifying --> open: fused fast path — trivial only<br/>(same agent implements + opens PR)
   specified --> implementing: implement agent
   implementing --> open: PR opened
   open --> fixing: review / CI / conflict
@@ -482,10 +482,18 @@ A PR is a draft only while a reviewer would be wasting their time on it:
 | Draft because… | Clears when… |
 |---|---|
 | an agent still has work in flight | the agent returns |
-| local gate or CI is red | the gate/CI goes green |
+| local gate is red, **or CI isn't terminal-and-green on this exact head SHA** | every check reports on this SHA and passes |
 | the complexity-scaled self-review hasn't run | it runs (`trivial` doesn't need one) |
 | an **open blocking decision** is unanswered | you answer it |
 | the PR body isn't written to standard | it is |
+
+> **"No failing check" is not the CI test, and the difference matters.** An empty or
+> not-yet-created check set has no failing check either, and *queued* is not *failing* —
+> so that wording un-drafted two PRs in production onto code nothing had verified. The
+> test is positive: checks reported on **this** head SHA, non-empty, all terminal, none
+> failed. Otherwise the PR stays draft (`draftReason: ci_pending`) and the next tick
+> un-drafts it once CI is genuinely done. A repo confirmed to have no CI at all is the
+> only exemption, and it has to be confirmed rather than assumed.
 
 Being **stacked on an unmerged base is not on that list** — a stacked PR is perfectly
 reviewable, and merging it puts its code into its blocker's branch, which is exactly
@@ -613,9 +621,6 @@ surface where a PR shows up — you should never have to ask:
   ```
   Task id *and* what it does in plain words, the cycle, a link to the plan PR, the
   tracker key, and what it's based on. Land cold on any PR and you know what it is.
-- **A `cadence:<slug>` label on every PR of the run**, so the repo's PR list groups the
-  cycle at a glance. (Best-effort — if the account can't create labels, the run notes it
-  once and carries on.)
 - **The plan PR carries the cycle map** — a table with one row per task, added when its
   PR opens. GitHub renders each referenced PR's live state beside it, so that one table
   answers "where is the cycle?" without the description ever being rewritten.
@@ -659,7 +664,7 @@ one. The file lives under `.cadence/`, which is gitignored — it's yours, not t
 You never have to hunt for any of it:
 
 - **At run open**, Cadence prints the lot once — the run directory (absolute), the plan
-  doc, the integration branch and plan PR, the cycle label, and the report path.
+  doc, the integration branch and plan PR, and the report path.
 - **Every turn afterwards** carries a one-line footer:
   ```
   Run: /path/to/repo/.cadence/cycles/20260706-1200-a1b2c3-<slug>-cycle · report: …/report.md (/cadence:report to refresh) · plan: docs/plans/proposed/… · integration: cadence/<slug>-integration (plan PR #1200)
@@ -831,10 +836,11 @@ The model is chosen by **what the agent is doing**, and each task's `complexity`
 
 | Phase | What it does | Model + effort |
 |---|---|---|
-| **spec** | verifies + extends the plan's brief, *decides `complexity`*; **implements in the same invocation when trivial/low** | **Opus, high** — always |
+| **spec** | verifies + extends the plan's brief, *decides `complexity`*; **implements in the same invocation when `trivial`** | **Opus, high** — always |
 | **implement** — `high` | TDD build of the most complex tasks | Opus, medium |
 | **implement** — `medium` | TDD build of lighter tasks | Sonnet |
-| **implement** — `low` / `trivial` | normally absorbed by the fused spec agent; spawned separately only to resume an interrupted run | Sonnet, low |
+| **implement** — `low` | TDD build of a small, well-understood change — **always its own agent** | Sonnet, low |
+| **implement** — `trivial` | absorbed by the fused spec agent; spawned separately only to resume an interrupted run | Sonnet, low |
 | **monitor / fix / cleanup** | read PR state, reply, small fixes, teardown | Sonnet, low |
 
 > *Think on Opus, do routine work on Sonnet.* Analysis is never run on a cheap model; the
@@ -844,9 +850,15 @@ Two efficiency rules shape the spec phase. It **consumes the planner's context b
 (touch set + requirements, already produced by Opus-tier analysis) — verifying it
 against current code rather than re-deriving it, using graphify queries when the graph
 exists, and escalating to sub-agents only on real drift. And when it lands on
-`trivial`/`low`, it **fuses straight into implementation** — one agent spawn instead of
-two, no context re-derivation, and the small change is built on the stronger model
-anyway.
+`trivial`, it **fuses straight into implementation** — one agent spawn instead of two,
+for a change too small to be worth re-spawning over.
+
+> **Why fusing stops at `trivial`.** One invocation is one model, and spec always runs
+> on Opus/high — so anything fused is *implemented* on Opus whatever its complexity
+> says. While `low` fused too, the cheapest tasks in a cycle ran on the most expensive
+> model while `medium` ran on Sonnet: the cost curve inverted, and cycles ran nearly
+> all-Opus in practice. `low` now stops at `specified` and gets its own Sonnet/low
+> implement agent, so the tier in the table above is the tier you actually pay for.
 
 **Complexity tiers** — `high | medium | low | trivial`. `trivial` means *no logic or
 behavior change* (a typo, a lint/format fix, a comment/doc edit).
@@ -1035,10 +1047,9 @@ it back to 180s on the next tick.
 | **Join branch** | `cadence/<slug>-t<id>-join` — integration + every blocker's branch, the synthetic base that lets a multi-blocker task start immediately; retired once its blockers land |
 | **Flow audit** | the per-tick check that no task is stalled "waiting for a merge" |
 | **Open decision** | a question only a human can answer, posted answerably on the PR; blocks readiness and auto-merge until resolved |
-| **Readiness checklist** | the five conditions that decide draft vs. ready — Cadence's call, never a question to the user |
+| **Readiness checklist** | the six conditions that decide draft vs. ready — Cadence's call, never a question to the user |
 | **Approval-authorized auto-merge** | a human approval on a task PR authorizes its agent to merge it, while every guard still holds |
 | **Identity header** | the first line of every PR body: task id + what it does + cycle + plan PR + base |
-| **Cycle label** | `cadence:<slug>`, applied to every PR of the run so the PR list groups it |
 | **Cycle report** | `<runDir>/report.md` — the run's evidence file; `/cadence:report` renders it any time |
 | **Base sync** | merging an advanced base into a task branch (never a rebase, never a force-push on an open PR) |
 | **Scope check** | `git diff origin/<base>...HEAD` after a sync must show only this task's files |
@@ -1046,7 +1057,7 @@ it back to 180s on the next tick.
 | **Idle-gating** | acting on a task only when it has no agent in flight |
 | **Complexity** | `high / medium / low / trivial`; set by the spec phase; drives model + review depth |
 | **Change detection** | one batched read-only GraphQL snapshot per tick; no delta → no agent spawned |
-| **Fused fast path** | a spec agent that finds `trivial`/`low` implements + opens the PR in the same invocation |
+| **Fused fast path** | a spec agent that finds `trivial` implements + opens the PR in the same invocation (only `trivial` — fusing anything larger forfeits its model tier) |
 | **Quiet tick** | a tick with no deltas, spawns, or in-flight agents; doubles the wake-up interval (max 30 min) |
 
 ---

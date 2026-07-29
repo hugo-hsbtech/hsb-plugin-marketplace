@@ -47,6 +47,15 @@ event the moment it happens, not at the end:
 > Rule of thumb: **if you wrote a field, you owe an event.** A report that can't show
 > when a PR became conflicted and when it was fixed is missing the exact evidence the
 > reader needs.
+>
+> Two capture failures seen in production, both of which gut the report:
+> **(1) no `tick` events at all** — the run could not say how many times it woke, how
+> many ticks were quiet, or whether the backoff worked, so the whole Cost section
+> rendered `not captured`; **(2) an event log thinner than the state files** — three
+> orchestrator errors, a cross-session collision, an open risk and an answered decision
+> existed only in `run.json`, so the timeline was missing precisely the run's most
+> important moments. Log the `tick` every wake-up, and log an `incident` the moment
+> anything goes wrong, **especially when Cadence itself is what went wrong.**
 
 | Kind | Logged when | Feeds the report's… |
 |---|---|---|
@@ -59,7 +68,7 @@ event the moment it happens, not at the end:
 | `conflict` / `conflict.resolved` | a sync conflicts; how it was resolved (base-favoured hunks) | **what went wrong** |
 | `pr.retargeted` | the PR's base changes — by you, or silently by GitHub after a branch delete | flow health |
 | `scope.checked` / `scope.polluted` | the post-sync diff-vs-base check (`filesChanged`, foreign paths) | **what went wrong** |
-| `task.spawn` | an agent is spawned (`agentKind`, `model`, effort) | cost, timeline |
+| `task.spawn` | **any** agent is spawned — spec/implement/monitor/fix/cleanup *and* every ad-hoc repair, verification or housekeeping agent (`agentKind`, `model`, effort) | cost, timeline |
 | `task.complexity` | the spec phase decides `complexity` (+ whether it fused) | per-task, cost |
 | `join.built` / `join.refreshed` / `join.retired` | a join branch is created, re-merged, or retired | flow health |
 | `pr.opened` | the PR is created (draft or not) | per-task, timeline |
@@ -74,12 +83,13 @@ event the moment it happens, not at the end:
 | `guard.blocked` | an auto-merge guard held the merge back (which guard, why) | merge health |
 | `automerge` | the agent merged under an approval (`authorizedBy`, `approvedSha`→`mergedSha`, `headDelta`) | outcome |
 | `merged` | the PR merged (by whom) | outcome |
+| `incident` | **Cadence got something wrong** (`kind`: `brief.false-premise` \| `topology.skew` \| `task.collision` \| `orchestrator.error` \| `external.merge` \| …), what caught it, what was done | **what went wrong** |
 | `stall` | the flow audit records a 3-tick stall (reason) | **what went wrong** |
 | `flow.converted` | a `waiting-for-merge` was converted (how) | flow health |
 | `escalation` | a task was re-spawned a model tier up, or a stale lease was recovered | **what went wrong**, cost |
 | `gate.failed` | the lint/format/tests gate failed (attempt number) | **what went wrong** |
 | `task.failed` | a task is given up on, with the blocker | outcome |
-| `tick` | each wake-up: `spawns`, `deltas`, `quiet`, the interval slept | cost |
+| `tick` | **every** wake-up, quiet ones included: `spawns` (by kind), `deltas`, `quiet`, `quietTicks`, `sleptSeconds` | cost |
 
 Keep `detail` to one sentence. Never log secrets, tokens, or file contents.
 
@@ -119,7 +129,7 @@ had three re-drafts and a parked review loop is a broken report.
 
 **Status:** COMPLETE | IN FLIGHT | ABANDONED · **Plan:** <planPath> · **Repo:** <owner/repo>
 **Started:** <createdAt> · **Ended:** <ts or "—"> · **Wall clock:** <Xd Yh>
-**Plan PR:** #<n> (<state>) · **Label:** `cadence:<slug>` · **Run dir:** <runDir>
+**Plan PR:** #<n> (<state>) · **Run dir:** <runDir>
 **Opened under:** cadence <policyVersion> · **Merge policy:** <auto | human-only>
 <if the installed version differs, say so here — the run kept its original policy>
 
@@ -216,10 +226,10 @@ are clean, and say which checks you ran to conclude that.
 
 | | |
 |---|---|
-| Agent spawns | spec <n> · implement <n> · monitor <n> · fix <n> · cleanup <n> |
+| Agent spawns | spec <n> · implement <n> · monitor <n> · fix <n> · cleanup <n> · other <n> |
 | By model | opus <n> · sonnet <n> · escalations <n> |
 | Ticks | <n> total · <n> quiet · longest backoff <n>s |
-| Fused fast paths | <n> (spawns saved) |
+| Fused fast paths | <n> `trivial` tasks finished in their spec invocation (spawns saved) |
 
 ## Timeline
 

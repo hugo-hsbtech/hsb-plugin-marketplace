@@ -34,6 +34,91 @@ already existed; nothing forced them.
 Round recorded in `docs/feedback/20260729-plan-doc-fidelity.md`, including what was
 deliberately left unchanged.
 
+### cadence — executor: the first real cycle report
+
+From `voucher-phase2-c1-exceptions-foundations` in `pagana-catalog-apps` — 18 tasks,
+PRs #31–#55, plan PR #30 merged at `cb630fd`. The run opened on **3.2.1** and was
+reloaded to **3.6.0** mid-run. Every finding was re-anchored against 3.10.0 before being
+accepted; several of the report's complaints were already fixed, and two of its biggest
+were not.
+
+**Topology and readiness — two defects still live in 3.10.0**
+
+- **A joined task's PR targets INTEGRATION, never the join.** The invariant had been
+  rewritten everywhere *except* the two places an agent reads before opening a PR:
+  `SKILL.md`'s construction bullet and `task-agent.md`'s `gh pr create` step both still
+  said the PR targets the join (`execution-state.md` repeated it a third time). That is
+  the exact defect that merged four PRs (#38/#39/#40/#42) into join branches, stranding
+  them off integration and costing a three-PR recovery. Fixed at all three sites, with
+  the incident quoted at the point of use.
+- **Readiness now requires CI TERMINAL and GREEN on the PR's current head SHA.** "CI has
+  no failing check" is satisfied by an *empty* check set and by `QUEUED` checks — it
+  un-drafted two PRs (#36, #39) onto code nothing had verified. The test is positive:
+  reported on this SHA, non-empty, all terminal, none failed; otherwise `draftReason:
+  ci_pending` and the next tick un-drafts it. A repo confirmed to have no CI is the only
+  exemption (`ciExpected: false`).
+
+**Upgrades can no longer re-base a live cycle**
+
+- **Branch topology joins the pinned promises** (merge policy · draft/readiness · `main`
+  safety · **topology**). A 3.2.1 → 3.6.0 reload adopted the new base model silently,
+  against the plan's §7 *and* an explicit user instruction already in state.
+  `run.json.topology` is written at run open; **the plan doc wins** over the skill's
+  default when they disagree; a drift on resume keeps the pinned value and logs a
+  `topology.skew` incident.
+- `/cadence:ship` states that on an already-open run **`run.json` wins over the command
+  text** — the pinned policy is not re-litigated on resume.
+
+**Model tiers actually apply now**
+
+- **Only `trivial` fuses.** The fused fast path had the opus/high spec agent implement
+  `trivial` *and* `low` tasks in one invocation — and one invocation is one model, so
+  every `low` task was **built on Opus** while `medium` built on Sonnet. The cost curve
+  was inverted: the cheapest tasks got the most expensive model. `low` now stops at
+  `specified` and gets its own sonnet/low implement agent.
+
+**Agent discipline**
+
+- **STATE THE RULE, NEVER THE DERIVED NUMBER.** Briefs carry facts, never counts or
+  arithmetic the orchestrator computed. Three wrong numbers reached briefs in one cycle;
+  one (`REQUIRED_PATHS` "21 → 23", confusing path keys with operations — the real delta
+  was zero) would have shipped a padded array and a false docblock. An agent that finds
+  a brief false **declines and reports it**.
+- **No agent waits inside a tick** — no sleep, no polling, no retry-until-green. CI
+  running *is* the answer: return `prState: ci_pending`. A monitor that looped on CI
+  burned ~80k subagent tokens per pass over four passes and needed `TaskStop`.
+- **A task agent writes its task file before returning.** One task file said "still
+  specifying, nothing merged" while its PR had long since landed.
+
+**Capture — the report's Cost section was almost entirely `not captured`**
+
+- A **`tick` event every wake-up**, quiet ones included, emitted as part of the re-arm
+  step (the kind was declared but never instructed anywhere).
+- **Every** spawn logs `task.spawn` — ad-hoc repair, verification and housekeeping
+  agents included.
+- A new **`incident`** event kind + `run.json.incidents`: Cadence's own failures are
+  first-class evidence. One run's ledger ended up thinner than its state files, with the
+  orchestrator's three errors, a collision and an open risk existing only in `run.json`.
+
+**Two more**
+
+- **`main` is watched.** Its head OID is in `refSnapshot`; a moved `main` triggers a
+  merge into integration and a scope check. An external PR merged mid-cycle broke an
+  already-merged migration and was only noticed when the plan PR went `CONFLICTING`.
+- **One orchestrator per task.** Before a task's first spawn, if its branch or a matching
+  PR already exists, don't spawn — surface `possible-concurrent-session`.
+
+**Removed**
+
+- **PR labels, entirely.** Cadence no longer creates a label, applies one, or asks for
+  one — the repo's label set belongs to its humans. Identity rests on the PR body's
+  identity header, the plan PR's cycle map, and the id+PR+description rule. `cycleLabel`
+  is gone from the schema.
+
+Round recorded in `docs/feedback/20260729-first-real-cycle-report.md`, including the six
+findings deliberately **not** acted on and the field in the next report that will show
+whether each fix worked.
+
 ---
 
 # cadence

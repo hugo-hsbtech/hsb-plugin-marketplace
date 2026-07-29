@@ -137,8 +137,8 @@ what the task does.)
   --undo`) if new in-flight work or a new blocking decision appears, and say so in a
   comment. **This call is always yours** — see the readiness rule below.
 - **Every PR says which task it is, everywhere it appears.** Identity header as the
-  first line of every PR body (both sizes), a `cadence:<slug>` label on every PR of the
-  run, a task→PR map table in the plan PR, and — in anything you write — never a bare
+  first line of every PR body (both sizes), a task→PR map table in the plan PR, and — in
+  anything you write — never a bare
   task id without its PR number and a plain description, never a PR number without what
   it does. Making the human ask "which PR is T3?" is a defect. See **Task ↔ PR
   identity**.
@@ -367,9 +367,32 @@ That is a promise broken by a version bump, and it is not allowed.
 - **Only the user changes it mid-run**, explicitly; then update both fields and record
   the authorization.
 
-Pinned: **merge policy, draft/readiness semantics, `main` safety** — the promises a human
-acts on. Everything mechanical (better conflict detection, cheaper ticks, richer reports)
-applies immediately, because it changes nothing the user was told.
+Pinned: **merge policy, draft/readiness semantics, `main` safety, and the BRANCH
+TOPOLOGY (how a task's PR base is derived from its blockers)** — the promises a human
+acts on. Everything mechanical (better conflict detection, cheaper ticks, richer
+reports) applies immediately, because it changes nothing the user was told.
+
+**Topology is pinned because an upgrade silently re-based a live cycle.** A run opened
+under a version whose rule was "0 or 2+ blockers → integration" was resumed after the
+plugin upgraded to a join-branch model, and the new model was adopted mid-flight —
+against the plan doc's own topology section *and* against an explicit user instruction
+already recorded in state. Four tasks' work merged somewhere the cycle could not see it
+(`pagana-catalog-apps#38/#39/#40/#42`), and unwinding it took three extra PRs. So:
+
+- **At run open, write `topology` into `run.json`** — the base rule this run will use
+  for 0 / 1 / 2+ blockers, plus `source: "skill" | "plan"`. It is pinned exactly like
+  the merge policy: a resumed run keeps the topology it opened with, whatever version
+  is installed now.
+- **The plan doc wins, and a disagreement is surfaced, never resolved silently.** If
+  the plan doc states a topology (a "branching"/"topology"/§-numbered base rule) that
+  differs from this skill's, take the **plan's** — the human read and approved that
+  document — record `topology.source = "plan"` with the conflicting skill rule
+  alongside it, log a `policy.pinned` event, and say so in one line at run open. Only
+  the user resolves it the other way.
+- **On resume, re-assert before dispatching anything.** If the topology you are about
+  to apply differs from `run.json.topology`, that is the upgrade drifting under a live
+  run: **keep the pinned one**, log an `incident` (`kind: "topology.skew"`), and put it
+  in `attention`. Never let a version bump re-base a cycle that is already in flight.
 
 ## Two-level architecture (who does what)
 This skill runs as a **thin top orchestrator** that delegates each task to its own
@@ -388,8 +411,8 @@ fix, or write task state — it only schedules and gates.
   reads `references/task-agent.md` (its full playbook — pass its path in every
   brief), resumes from its `tasks/<id>.json`, and drives ITS task one step as far
   as it can right now — spec (analysis/plan; **flows straight into implement→PR in
-  the same invocation when it finds `complexity` = `trivial`/`low`** — the fused
-  fast path) → implement→PR if pre-PR, else monitor→fix→reply, else cleanup if
+  the same invocation only when it finds `complexity` = `trivial`** — the fused
+  fast path; `low` and up stop at `specified` so the implement tier applies) → implement→PR if pre-PR, else monitor→fix→reply, else cleanup if
   merged. It may spawn its own sub-agents, but only for genuine unknowns (see the
   playbook's verify-and-extend rule). It is the **sole writer of its
   `tasks/<id>.json`** and the one that does all `gh` work for its PR. It **dies
@@ -435,12 +458,13 @@ single biggest quota leak in a long run. Kill it with a snapshot diff:
    (task PRs + the plan PR) **and every base ref** — per PR:
    `updatedAt, headRefOid, baseRefName, mergedAt, isDraft, reviewDecision, mergeable,
    mergeStateStatus,` the last commit's `statusCheckRollup { state }`, **plus the head
-   OID of the integration branch and of every task/join branch**:
+   OID of `main`, of the integration branch, and of every task/join branch**:
    ```
    gh api graphql -f query='query{ repository(owner:"O",name:"R"){
      t1: pullRequest(number:101){ ...prSnap }
      t2: pullRequest(number:102){ ...prSnap }
      plan: pullRequest(number:100){ ...prSnap }
+     mainRef:  ref(qualifiedName:"refs/heads/main"){ target{oid} }
      integRef: ref(qualifiedName:"refs/heads/cadence/<slug>-integration"){ target{oid} }
      t1Ref:    ref(qualifiedName:"refs/heads/cadence/<slug>-t1-…"){ target{oid} } } }
    fragment prSnap on PullRequest { updatedAt headRefOid baseRefName mergedAt isDraft
@@ -451,6 +475,18 @@ single biggest quota leak in a long run. Kill it with a snapshot diff:
    change — their `updatedAt` doesn't move — but their **base ref does**. Without
    watching refs, a merge silently leaves every dependent behind or conflicted and
    nothing wakes up to fix it. A moved base ref is a delta for **every** PR based on it.
+
+   **`main` is watched too, and a moved `main` is a delta for the whole cycle.** The
+   repo does not stop while a cycle runs: somebody merges unrelated work into `main`,
+   and the cycle is now built on a foundation that changed underneath it. In production
+   an external PR renamed the tables a cycle's *already-merged* migration indexed and
+   swapped the DB layout the whole chain assumed — the cycle's own gates never saw it
+   (the affected suite only runs on a manual input), and it surfaced late as the plan
+   PR going `CONFLICTING`. So when `mainRef` moves: spawn an agent in the **integration
+   worktree** to merge `main` into integration promptly (merge, never rebase — the plan
+   PR is open), scope-check the result against both parents, and treat any breakage it
+   reveals as a first-class cycle finding — it goes in `attention`, gets an `incident`
+   event, and lands in the report. Do **not** wait for the plan PR to go red to notice.
 2. **Diff against `run.json.prSnapshot[<taskId>]`.** Any field differs (or no
    snapshot yet) → that PR has news → its task gets a monitor agent this tick
    (if idle). All fields equal → **spawn nothing for that task** — record the tick
@@ -524,10 +560,20 @@ the retirement rule:
   branch exists on the remote — merged or not.
 - **Construction (task agent):** `cadence/<slug>-t<id>-join`, cut from
   `origin/<integrationBranch>`, with each blocker's branch merged in, pushed. The task
-  branch is cut from the join; the PR targets the join. Cross-blocker conflicts are
-  resolved **in the join branch** and called out in the PR body. **A join is per task,
-  never shared** — two tasks pointing at one join is how a join stops being scaffolding
-  and becomes a base people merge into.
+  branch is cut from the join — and **the PR targets the INTEGRATION branch, never the
+  join** (`gh pr create --base <integrationBranch>`). Branching off the join is how you
+  compile against your blockers; targeting integration is how the work reaches the
+  cycle. Cross-blocker conflicts are resolved **in the join branch** and called out in
+  the PR body. **A join is per task, never shared** — two tasks pointing at one join is
+  how a join stops being scaffolding and becomes a base people merge into.
+
+  > **Why this bullet is worded so insistently.** In production, a run whose plan said
+  > "target integration" adopted a mid-run upgrade's join model and let four task PRs
+  > (`pagana-catalog-apps#38`, `#39`, `#40`, `#42`) target — and then merge into — their
+  > joins. A join has no PR, so nothing carried that work onto integration: it took a
+  > four-step, three-PR recovery (`#41`, `#45`, `#46`) to unwind. **Branch off the join,
+  > target integration.** If you have just built a join, re-read this line before
+  > `gh pr create`.
 - **Refresh:** when any blocker's branch advances or lands, the task agent re-merges
   the current integration + blocker heads into the join on its next tick (Monitor pass
   step 4) — flow continues, nothing halts.
@@ -552,10 +598,11 @@ not something assigned when the task was defined:
 
 | Phase / agent kind | What it does | Model + effort (`modelPolicy`) |
 |---|---|---|
-| **spec** (analysis / planning / specifying) | verify-and-extend the plan brief, real codebase checks (graphify-first when available); **decides this task's `complexity`**; **fuses straight into implement for `trivial`/`low`** | **`opus`, effort `high`** — always, every task |
+| **spec** (analysis / planning / specifying) | verify-and-extend the plan brief, real codebase checks (graphify-first when available); **decides this task's `complexity`**; **fuses straight into implement for `trivial` ONLY** | **`opus`, effort `high`** — always, every task |
 | **implement** — `complexity: high` | TDD build of the most complex tasks | **`opus`, effort `medium`** |
 | **implement** — `complexity: medium` | TDD build of lighter tasks | **`sonnet`** |
-| **implement** — `complexity: low`/`trivial` | normally absorbed by the fused spec agent; spawned separately only when a fused run was interrupted | **`sonnet`, effort `low`** |
+| **implement** — `complexity: low` | TDD build of a small, well-understood change — **always its own agent**, never fused | **`sonnet`, effort `low`** |
+| **implement** — `complexity: trivial` | absorbed by the fused spec agent; spawned separately only when a fused run was interrupted | **`sonnet`, effort `low`** |
 | **monitor / fix / cleanup** | read PR state, reply, small fixes, worktree teardown — light | **`sonnet`**, effort `low` |
 
 Rules:
@@ -566,10 +613,19 @@ Rules:
   re-derived from scratch).
 - **Complexity is set during the spec phase** (the spec agent writes `complexity` to
   its `tasks/<id>.json` as a finding), NOT pre-assigned by the planner. For
-  `high`/`medium` the *implement* agent is then spawned at `modelPolicy[complexity]`;
-  for **`trivial`/`low` the spec agent implements in the same invocation** (fused
-  fast path) — one spawn instead of two, no context re-derivation, and the small
-  change is built on the stronger model anyway.
+  `high`/`medium`/**`low`** the *implement* agent is then spawned separately at
+  `modelPolicy[complexity]`; **only `trivial` fuses** — the spec agent finishes the
+  change in the same invocation, because re-spawning to fix a typo costs more than it
+  saves.
+- **`low` does NOT fuse — and that is deliberate.** Fusing means one invocation on one
+  model, and the spec model is always Opus/high, so a fused task is *implemented* on
+  Opus no matter what its complexity says. Extending that to `low` inverted the whole
+  cost curve: `high` built on opus/medium, `medium` on sonnet, and the *cheapest* tasks
+  on the most expensive model — which is how a cycle ends up running almost entirely on
+  Opus while the policy table claims otherwise. A `low` task therefore ends at
+  `specified` and gets its own **sonnet/low** implement agent. The extra spawn is the
+  price of the tier actually applying; `trivial` keeps the fast path because there the
+  spawn genuinely costs more than the model does.
 - The orchestrator sets `model`/effort when it spawns each agent via the Agent tool:
   spec → opus/high; implement → by the complexity the spec wrote; monitor/cleanup →
   the cheap `monitor` policy.
@@ -711,12 +767,14 @@ and resumes when you re-run `/cadence:ship <plan-path>`.
    > the plan itself changes — a task added, dropped, or re-based. Do NOT mirror PR
    status / CI / merge state into the body and do NOT keep re-editing it: GitHub
    already renders the live status of referenced PRs, so re-writing the description on
-   every change is wasted churn (and re-triggers noise). Also create the run's cycle
-   label once — `gh label create "cadence:<slug>" --color BFD4F2 --description
-   "Cadence cycle <slug>"` (ignore "already exists"; on a permissions failure record
-   `cycleLabel: "unavailable"` and carry on) — and apply it to this PR. Record
-   `planPrNumber` / `planPrUrl` / `cycleLabel`, and seed `prTitlePattern` from the
-   title you used.
+   every change is wasted churn (and re-triggers noise). Record
+   `planPrNumber` / `planPrUrl`, and seed `prTitlePattern` from the title you used.
+
+   > **Never create labels, and never label a PR.** The repo's label set belongs to
+   > the repo's humans, not to a tool passing through. Cadence does not run
+   > `gh label create`, does not `--add-label`, and does not ask for one to be made.
+   > Task↔PR identity is carried by the identity header, the cycle map, and the
+   > naming rules — see **Task ↔ PR identity**.
    This PR stays a **draft** until every task has merged into integration (step 3
    un-drafts it), and the **human** merges it last.
 5. **Tell the user where everything lives — and what the merge policy is — once, at run
@@ -754,7 +812,7 @@ any `waiting-for-merge`). Then, of the active tasks, act ONLY on the **idle** on
 
 | Task status (idle, no agent in flight) | Spawn this tick (model) |
 |---|---|
-| `pending` (base available) | **spec agent** — verify-and-extend the brief, decides `complexity`; **fuses into implement for `trivial`/`low`** (**opus/high**) → `specified` or `open` |
+| `pending` (base available) | **spec agent** — verify-and-extend the brief, decides `complexity`; **fuses into implement for `trivial` only** (**opus/high**) → `specified` (or `open` when fused) |
 | `specified` | **implement agent** — TDD build → opens PR (**model = `modelPolicy[complexity]`**) → `open` |
 | `open` **with a snapshot delta** | **monitor agent** — Monitor pass on the settled PR (**sonnet/low**) |
 | `open`, no delta, but **readiness or auto-merge may now pass** (draft whose blocker just merged, approval recorded and guards satisfiable, a base that advanced) | **monitor agent** (**sonnet/low**) — the readiness / auto-merge / base-sync re-check is work even when the PR itself didn't change |
@@ -777,6 +835,54 @@ under a plugin install that is `${CLAUDE_PLUGIN_ROOT}/skills/cadence-executor/re
 (touch set + requirements + acceptance criteria), its `runDir`/task-file path, the
 `integrationBranch`, the current `prTitlePattern`, and whether graphify is
 available (`preflight.graphify`).
+
+**Log a `task.spawn` event for EVERY agent you spawn** — spec, implement, monitor, fix,
+cleanup, and every ad-hoc one (repair, verification, housekeeping, reconciliation)
+— with `agentKind`, `model`, and effort. A spawn with no event did not happen as far as
+the report is concerned, and the cost section then reads `not captured` while the run
+was in fact spawning dozens of agents. There is no such thing as an unlogged spawn.
+
+> #### STATE THE RULE, NEVER THE DERIVED NUMBER (brief-writing invariant)
+> A brief may carry facts you can point at — a path, a requirement id, a blocker's PR
+> number, the plan's own words. It **must not carry a count, a total, or an arithmetic
+> claim you computed yourself.** Write the *rule* and let the agent, which is standing
+> in the worktree, do the counting.
+>
+> This is not hypothetical. In one production cycle the orchestrator put three derived
+> numbers into briefs and all three were wrong: a touch set "going 10 → 11 files" that
+> was a double count; a claim about which file a script generates that was taken from
+> another agent's report and never verified; and `REQUIRED_PATHS` "goes 21 → 23", which
+> confused OpenAPI **path keys** with **operations** — the task added two GET methods
+> to path items that already existed, so it added **zero** entries. An agent trusting
+> that number would have padded the array to 23 with paths that do not exist and
+> shipped a false docblock. All three were caught only because the receiving agents
+> counted for themselves against the live tree instead of believing the brief.
+>
+> - ❌ "`REQUIRED_PATHS` goes from 21 to 23." · ❌ "This touches 11 files."
+>   ❌ "`CLAUDE.md` is generated by `build-agents.ts`."
+> - ✅ "`REQUIRED_PATHS` must contain exactly one entry per OpenAPI **path key** this
+>   task exposes — count the live array yourself and say what you found; adding a
+>   method to an existing path item adds no entry."
+> - ✅ "Touch only the files your brief's touch set justifies; report the actual count
+>   in your PR body." · ✅ "Check whether `CLAUDE.md` is generated before editing it —
+>   `build-agents.ts` writes a specific set of artifacts; verify which."
+>
+> If you *must* pass on a number (from a plan, a prior agent, a report), label it
+> **unverified** and name its source, and instruct the agent to verify before relying
+> on it. An agent that finds a brief's claim false should **decline and report it** —
+> that is the correct behaviour, not insubordination; record it as an `incident` with
+> `kind: "brief.false-premise"` and correct the brief.
+
+**Before spawning a `pending` task's first agent, check nobody else already took it.**
+Two orchestrators on one task is how duplicate PRs and lost work happen, and in
+production the only reason a collision was caught was that the other session's agent
+happened to relay through this one. So, in the same read-only pass: if the task's
+branch already exists on the remote, or a PR matching `prTitlePattern` for this task id
+is already open, **do not spawn**. Record it in `attention` as
+`possible-concurrent-session` with the branch/PR it found, log an `incident`
+(`kind: "task.collision"`), and let the user decide who owns the task. Adopting the
+existing branch, opening a second PR, or force-pushing over it are all wrong: the other
+session may be mid-write, and neither of you can see the other's state.
 
 Forbidden, because it breaks parallelism, isolation, one-PR-per-task, or idle-gating:
 - Putting two or more tasks into one agent's prompt ("do T2 and T3").
@@ -819,6 +925,15 @@ After the tick's per-task agents return, the top orchestrator does only bookkeep
   (un-draft, parent tracker → In Review; see "Plan-PR handling"). The plan PR is
   itself driven by a per-task-style agent in the integration worktree when it has
   CI/comments.
+- **Append this wake-up's `tick` event — EVERY wake-up, quiet ones included.** One line
+  to `events/run.jsonl`: `{ts, actor: "orchestrator", kind: "tick", …}` with `spawns`
+  (how many, by kind), `deltas` (which tasks had news), `quiet` (true/false),
+  `quietTicks`, and the `sleptSeconds` you are about to schedule. This is the only
+  record that a wake-up ever happened: a multi-day run that logs none of them produces a
+  report whose entire cost section reads `not captured` — which is exactly what happened
+  in production, where the run could not say how many times it woke, how many ticks were
+  quiet, or whether the backoff was working. A tick costs one JSON line; skipping it
+  costs the whole Cost section. Write it, then re-arm.
 - **Re-arm the loop (mandatory unless fully done) — at the ADAPTIVE interval.**
   Call **ScheduleWakeup** with `delaySeconds` computed from `run.json.monitorBackoff`
   (`{baseSeconds: 180, maxSeconds: 1800, quietTicks}`):
@@ -851,7 +966,7 @@ its `tasks/<id>.json` and does only the step its `status` calls for — **Spec**
 (worktree + descriptive branch off its base, **building its join branch first when it
 has 2+ blockers**; verify-and-extend the plan brief, graphify-first; decide
 `complexity`; raise any **open decision** it can't settle; fused straight into
-implement for `trivial`/`low`) → **Implement** (TDD; green gate; complexity-scaled
+implement for `trivial` only) → **Implement** (TDD; green gate; complexity-scaled
 pre-push self-review — run EXACTLY ONCE, only the lint/tests gate is re-run after
 fixes, never a second `/code-review`; open its own PR against its `baseBranch`, then
 run the **readiness checklist** and un-draft itself if it passes) →
@@ -881,6 +996,19 @@ now, never what happened. The event log is the ledger, and it is the only one.**
 emits `snapshot.delta` (which fields, `old` → `new`) — that is the per-PR change ledger
 the report renders; every base ref that moves emits `base.moved` with the dependents it
 affects.
+
+**The rule binds hardest for the things you'd rather not write down.** In production the
+event ledger ended up *thinner* than the state files: a run whose `run.json` recorded
+three of the orchestrator's own errors, a cross-session collision, an open risk, and an
+answered decision had **no event line for any of them** — the reconstruction had to come
+out of state, which is the opposite of the design. Every anomaly gets an `incident`
+event as it happens (`kind`: `brief.false-premise` · `topology.skew` · `task.collision` ·
+`orchestrator.error` · `external.merge` · whatever it actually was), with what happened,
+what caught it, and what was done. **Cadence's own mistakes are first-class evidence**;
+they are the most valuable lines in the log, they are what makes the next version
+better, and a run that hides them has broken the one rule the report depends on. Before
+you write any field to `run.json` that is not a routine pointer — an incident, a stall,
+an unresolved decision, an attention entry with a cause — write its event first.
 
 Log the moment it happens — spawns, complexity decisions, PR opened/ready/re-drafted,
 decisions raised/answered, reviews and fix rounds, CI flips, base syncs, conflicts and
@@ -913,7 +1041,10 @@ and a copy-pasteable *Feedback for the Cadence maintainer* section.
 A cycle opens 5–12 PRs at once. If the mapping between a task and its PR lives only in
 the plan doc and the state files, the human ends up asking "which PR was T3 again?" on
 every single turn — a defect, and an easy one to kill: **stamp the identity into every
-surface where a PR appears.** Four places, all mandatory:
+surface where a PR appears.** Three places, all mandatory — and **not one of them is a
+label.** Cadence never creates a label and never labels a PR: the repo's label set
+belongs to its humans, and a tool passing through for a few days does not get to write
+to it. Identity rides in what Cadence is already writing anyway:
 
 1. **The PR body's first line — an identity header, in BOTH body sizes.** Not just the
    full template; a two-sentence simple PR gets it too:
@@ -925,14 +1056,7 @@ surface where a PR appears.** Four places, all mandatory:
    Task id **and** a plain-language title, the cycle slug, a link back to the plan PR,
    the tracker key if any, and what it's based on. Omit tokens that don't exist; never
    invent a ticket key.
-2. **A cycle label on every PR of the run** — `cadence:<slug>` — so the repo's PR list
-   groups them at a glance. Create it once per run (`gh label create "cadence:<slug>"
-   --color BFD4F2 --description "Cadence cycle <slug>"`, ignore "already exists"), and
-   apply it to every task PR *and* the plan PR at creation (`gh pr edit <n> --add-label
-   "cadence:<slug>"`). **Best-effort**: if label creation is denied by permissions,
-   record it once in `run.json` (`cycleLabel: "unavailable"`) and move on — never let
-   it block or retry-loop.
-3. **The plan PR body is the cycle's canonical map** — a table, appended one row per
+2. **The plan PR body is the cycle's canonical map** — a table, appended one row per
    task as its PR opens (still write-once per row; don't re-edit rows afterwards):
 
    | Task | What it does | PR | Base |
@@ -942,7 +1066,7 @@ surface where a PR appears.** Four places, all mandatory:
 
    GitHub renders each referenced PR's live state next to it, so this one table
    answers "what's the state of the cycle?" without touching the description again.
-4. **Every message you write** — turn summaries, `attention` entries, dispatch notes,
+3. **Every message you write** — turn summaries, `attention` entries, dispatch notes,
    PR comments that mention sibling work. The rule is absolute: **a task id never
    appears without its PR number and a plain-language description, and a PR number
    never appears without what it does.** `T3` alone is meaningless to the human;
@@ -977,7 +1101,8 @@ All true → **`gh pr ready <n>`**, post one short comment ("ready for review �
 set `isDraft = false` + `readyAt` in the task file. Any false → stay/return to draft
 and record which item failed.
 1. No agent in flight for this task other than the one evaluating.
-2. Local gate green (lint/format/tests) and CI has no failing check.
+2. Local gate green (lint/format/tests) **and CI TERMINAL AND GREEN on this exact
+   head SHA** — see below. "No failing check" is not the test.
 3. Self-review done for its complexity (or `trivial` → not required).
 4. No unanswered **blocking** open decision.
 5. PR body complete: what & why, how to test, decision log if any, open decisions if any.
@@ -989,6 +1114,30 @@ and record which item failed.
 
 If a PR later regresses (new in-flight work, a new blocking decision, CI goes red),
 re-draft it (`gh pr ready --undo`) and post a one-line comment saying why.
+
+> #### Item 2 in full — CI must be TERMINAL and GREEN on THIS SHA
+> The wording used to be "CI has no failing check", and it let two PRs un-draft with
+> no green run behind them: one where the checks had **not been created yet** ("no CI
+> checks report on this branch" — an *empty* check set trivially has no failing
+> check), and one where two checks were still `QUEUED` — queued is not failing. Both
+> were invitations to review code nothing had verified. So the test is positive, not
+> negative:
+> - the rollup is on the **current `headRefOid`** — a green run against the previous
+>   SHA says nothing about this one;
+> - the check set is **non-empty**, and every check has reached a **terminal**
+>   conclusion (`SUCCESS` / `NEUTRAL` / `SKIPPED`) — nothing `QUEUED`, `IN_PROGRESS`,
+>   `PENDING`, `EXPECTED`, or `WAITING`;
+> - no check is `FAILURE` / `TIMED_OUT` / `CANCELLED` / `ACTION_REQUIRED`.
+>
+> Anything else → **item 2 is false**: stay draft with `draftReason: "ci_pending"`
+> and re-evaluate next tick. This is not a stall — the tick that sees the rollup go
+> terminal-green un-drafts the PR without anyone asking.
+>
+> **The one exception, and it must be proven, not assumed:** a repo with no CI at all.
+> Confirm it — the repo has no workflows that trigger on this PR's events — record
+> `ciExpected: false` in the task file with that reason, and the local gate carries
+> readiness alone. An empty check set is otherwise treated as **not yet reported**,
+> never as green.
 
 ### Staying current with a moving base — and keeping the diff honest
 

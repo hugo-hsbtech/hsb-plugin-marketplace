@@ -53,8 +53,9 @@ Nobody should ever have to ask which PR belongs to which task. One line answers 
 - `base:` in plain language — `the integration branch`, `stacked on #1206 (adds X) —
   merge after it`, or `a join of #1206 + #1207, whose conflicts are resolved here`.
 
-Omit tokens that don't apply. Every PR also carries the run's `cadence:<slug>` label so
-the repo's PR list groups the cycle at a glance.
+Omit tokens that don't apply. **Cadence never labels a PR and never creates a label** —
+the repo's label set belongs to its humans. The identity header and the plan PR's cycle
+map are what make a PR findable.
 
 ---
 
@@ -179,7 +180,7 @@ per task as its PR opens; the diagrams are redrawn only if the *plan* changes.
 
 <2–4 sentences: what this cycle delivers and why, in plain language.>
 
-**Plan:** `docs/plans/proposed/<...>.md` · **Tasks:** <n> in <n> waves · **Label:** `cadence:<slug>`
+**Plan:** `docs/plans/proposed/<...>.md` · **Tasks:** <n> in <n> waves
 
 ## The plan
 

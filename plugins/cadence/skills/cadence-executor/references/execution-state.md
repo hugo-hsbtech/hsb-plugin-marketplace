@@ -56,8 +56,6 @@ must never be committed onto a feature branch).
   "planPrNumber": 1200,
   "planPrUrl": "https://github.com/org/repo/pull/1200",
   "planPrStatus": "draft",
-  "cycleLabel": "cadence:matchmaking-followups",
-  "//cycleLabel": "The label applied to every PR of this run so the repo's PR list groups the cycle. Created once at run open; \"unavailable\" if the account can't create labels (best-effort, never a blocker).",
   "prTitlePattern": {
     "exemplar": "[ABC-1234] Add reply-correlation matcher",
     "note": "[<source-key>] <Title in sentence case>"
@@ -88,6 +86,18 @@ must never be committed onto a feature branch).
     "cadence/matchmaking-followups-t1-add-reply-correlation-matcher": "9f1c2ab…"
   },
   "//refSnapshot": "Head OID of the integration branch and every task/join branch. A moved ref is a delta for EVERY PR based on it — this is how a merge the human just made wakes up its dependents, since their own PR fields don't change when their base moves.",
+  "topology": {
+    "0blockers": "integration", "1blocker": "that blocker's branch (stacked)",
+    "2plus": "branch off a per-task join; PR TARGETS INTEGRATION, never the join",
+    "source": "skill"
+  },
+  "//topology": "The base rule this run uses, PINNED at run open exactly like the merge policy. source: 'plan' when the plan doc states its own topology (the plan wins — the human read and approved it; record the skill rule that disagreed). On resume, if the installed skill's topology differs from this, KEEP THIS ONE, log an incident (kind: 'topology.skew') and surface it: an upgrade must never re-base a live cycle. This exists because a mid-run upgrade once swapped the base model against the plan and an explicit user instruction, stranding four tasks' merged work off integration.",
+  "incidents": [
+    { "at": "2026-05-04T11:20:00Z", "kind": "brief.false-premise", "taskId": "T4",
+      "what": "brief asserted REQUIRED_PATHS goes 21 -> 23; path keys already existed, delta is 0",
+      "caughtBy": "T4 spec agent, counted the live array", "action": "brief corrected; no code change" }
+  ],
+  "//incidents": "Cadence's OWN failures, recorded as they happen — wrong briefs, topology skew, task collisions, external merges that broke the cycle, anything the run got wrong. Every entry ALSO gets an `incident` event in events/run.jsonl (if you wrote a field, you owe an event). These are the most valuable lines in the run: they are what the cycle report's 'what went wrong' is built from, and the failure sections are never softened.",
   "policyVersion": "3.7.0",
   "//policyVersion": "The cadence version this run was OPENED under. Behaviour that the user was told about at run open — merge policy above all — is pinned to it. If the installed plugin is newer, note the skew ONCE in the turn summary and keep behaving as the run started; only the user can opt an in-flight run into new policy.",
   "approvalMergePolicy": "auto",
@@ -152,6 +162,10 @@ then uses it to pick the Implement agent's model. `agentKind` ∈
   (always)**; **implement** → high→opus/medium, medium/low/trivial→sonnet; **monitor/
   fix/cleanup** → sonnet, low effort. Think on Opus, do routine work on Sonnet — don't run
   the whole cycle on Opus, and don't run analysis on a cheap model.
+  **The tier only applies if the phase is actually a separate spawn**, so only
+  `trivial` uses the fused fast path; a fused `low` would be implemented by the
+  opus/high spec agent, which is how a cycle ends up running almost entirely on Opus
+  while this table says otherwise.
 
 ## `tasks/<id>.json` (task-agent-owned)
 
@@ -214,14 +228,18 @@ then uses it to pick the Implement agent's model. `agentKind` ∈
 ## Status values (a task's `status`, in `tasks/<id>.json`)
 - `pending` — planned, not started (no file yet = pending). **Idle** → spawn a **spec** agent (opus/high).
 - `specifying` — a spec agent is **in flight** (analysis + plan, deciding complexity). Skip.
-  A spec agent that finds `complexity` = `trivial`/`low` **fuses straight into the
-  Implement phase in the same invocation** (one spawn, no context re-derivation) and
-  ends at `open`; only `medium`/`high` stop at `specified`.
-- `specified` — spec done, `complexity` written (`medium`/`high` only — lighter tasks
-  fused past this), **idle** → spawn an **implement** agent at `modelPolicy[complexity]`.
+  A spec agent that finds `complexity` = **`trivial`** (and only `trivial`) **fuses
+  straight into the Implement phase in the same invocation** and ends at `open`;
+  `low`/`medium`/`high` all stop at `specified`. Fusing means one invocation on one
+  model, and spec always runs on opus/high — so anything fused is *built* on Opus
+  whatever its complexity says. That is worth it for a typo and nothing more.
+- `specified` — spec done, `complexity` written (`low`/`medium`/`high` — only `trivial`
+  fuses past this), **idle** → spawn an **implement** agent at
+  `modelPolicy[complexity]`.
 - `implementing` — an implement agent is **in flight** (worktree+branch+code, pre-PR). Skip.
-- `open` — PR created (base = the task's `baseBranch`: integration, its single
-  blocker's branch when stacked, or its join branch), **settled/idle**, awaiting
+- `open` — PR created (base = the task's `baseBranch`: integration, or its single
+  blocker's branch when stacked — **a 2+-blocker task branches off its join but its PR
+  targets integration; the join is never a PR base**), **settled/idle**, awaiting
   human/CI → this is the ONLY status a Monitor pass runs on. `open` covers both draft
   and ready — the draft flag is `isDraft`, re-evaluated by the readiness checklist on
   every tick, never by asking the user.
@@ -258,7 +276,11 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
 - `prSnapshot` / `refSnapshot` — per-task change-detection baseline from the
   orchestrator's ONE batched read-only GraphQL call (`updatedAt`, `headRefOid`,
   `baseRefName`, `mergedAt`, `isDraft`, `reviewDecision`, `mergeable`,
-  `mergeStateStatus`, `ciState`), **plus the head OID of every base ref**. Two rules that
+  `mergeStateStatus`, `ciState`), **plus the head OID of `main`, the integration branch,
+  and every task/join branch**. `main` is in there because the repo keeps moving while a
+  cycle runs: an external merge can change the foundation the whole cycle is built on,
+  and waiting for the plan PR to turn red is finding out too late — a moved `main` is a
+  signal to merge it into integration and re-check, not a curiosity. Two rules that
   exist because conflicts were being missed: (1) **a moved ref is a delta for every PR
   based on it** — when the human merges, the dependents' own PR fields don't change, so
   refs are the only signal; (2) **`mergeable: UNKNOWN` is never "no news"** — GitHub
@@ -285,9 +307,9 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
     the authorization.
 
   This pinning covers the promises a human relies on: **merge policy, draft/readiness
-  semantics, and `main` safety**. Mechanical improvements (better conflict detection,
-  cheaper ticks, richer reports) always apply immediately — they change nothing the user
-  was told.
+  semantics, `main` safety, and the branch topology** (`topology`, above). Mechanical
+  improvements (better conflict detection, cheaper ticks, richer reports) always apply
+  immediately — they change nothing the user was told.
 - `approvalMergePolicy` — `"auto"` (default **for new runs**) or `"off"`. Under `"auto"`, a task PR
   carrying an **intact human approval** is merged by its own agent once every guard
   passes (human approver, approval not superseded, head unchanged in substance since
@@ -309,10 +331,11 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
 - `unresolvedDecisions` — decisions that were still open when their PR was merged
   anyway (by a human): the question, the default that therefore shipped, and the PR
   link. Carried into the final run summary as follow-ups so nothing evaporates.
-- `cycleLabel` — the `cadence:<slug>` label applied to every PR of the run (task PRs and
-  the plan PR) so the repo's PR list groups the cycle at a glance. Created once at run
-  open; `"unavailable"` when the account can't create labels — best-effort, never a
-  blocker, never retried in a loop.
+- **(removed) `cycleLabel`** — Cadence no longer creates or applies labels. The repo's
+  label set belongs to its humans, and a run passing through for a few days does not
+  write to it. Task↔PR identity is carried by the PR body's identity header, the plan
+  PR's cycle map, and the naming rules. A `cycleLabel` left over in an older run's
+  `run.json` is ignored.
 - `events/run.jsonl` + `events/<id>.jsonl` — **append-only evidence logs**, one line per
   event (`{ts, actor, kind, detail, pr?, url?, sha?, model?}`), written by their single
   owner as things happen (the orchestrator's own log; one per task agent). They are the
@@ -413,7 +436,7 @@ un-drafted, awaiting human) → `merged` (human merged plan PR into `main` — r
    available** — integration, its single blocker's branch when stacked, or all
    blockers' branches existing so a join can be built; NOT "blockers merged" —
    `agentInFlight: false`) in a single message, model by phase:
-   `pending`→**spec** (opus/high; fuses into implement for `trivial`/`low`),
+   `pending`→**spec** (opus/high; fuses into implement for `trivial` only),
    `specified`→**implement** (`modelPolicy[complexity]`), `open` **with a snapshot
    delta**→**monitor** (sonnet), `merged`→**cleanup** (sonnet; recovery only — the
    monitor agent normally cleans up in the tick that detects the merge); **skip any
